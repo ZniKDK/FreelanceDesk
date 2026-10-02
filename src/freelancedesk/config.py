@@ -20,13 +20,18 @@ def load_config(path: Path = CONFIG_PATH) -> configparser.ConfigParser:
     return config
 
 
-def build_dsn(config: configparser.ConfigParser) -> str:
-    """Собрать строку подключения к PostgreSQL из секции [database]."""
+def build_dsn(config: configparser.ConfigParser,
+              dbname: str | None = None) -> str:
+    """Собрать строку подключения к PostgreSQL из секции [database].
+
+    dbname позволяет подключиться к другой базе с теми же учётными
+    данными — так тесты работают с freelancedesk_test.
+    """
     db = config["database"]
     return (
         f"host={db.get('host', 'localhost')} "
         f"port={db.get('port', '5432')} "
-        f"dbname={db['name']} "
+        f"dbname={dbname or db['name']} "
         f"user={db['user']} "
         f"password={db['password']}"
     )
