@@ -36,10 +36,21 @@ class OrderManager:
 
     # --- Клиенты ---
 
-    def add_client(self, client: Client) -> Client:
+    @staticmethod
+    def _validate_client(client: Client) -> None:
         if not client.name.strip():
             raise ValueError("Имя клиента не может быть пустым")
+
+    def add_client(self, client: Client) -> Client:
+        self._validate_client(client)
         return self._storage.add_client(client)
+
+    def update_client(self, client: Client) -> None:
+        self._validate_client(client)
+        self._storage.update_client(client)
+
+    def get_client(self, client_id: int) -> Client | None:
+        return self._storage.get_client(client_id)
 
     def list_clients(self) -> list[Client]:
         return self._storage.list_clients()
@@ -52,14 +63,44 @@ class OrderManager:
 
     # --- Заказы ---
 
-    def add_order(self, order: Order) -> Order:
+    def _validate_order(self, order: Order) -> None:
+        """Общие проверки для создания и изменения заказа."""
         if not order.title.strip():
             raise ValueError("Название заказа не может быть пустым")
         if order.amount < 0:
             raise ValueError("Сумма заказа не может быть отрицательной")
         if self._storage.get_client(order.client_id) is None:
             raise ValueError(f"Клиент {order.client_id} не найден")
+
+    @staticmethod
+    def _sync_paid_on(order: Order, today: date | None) -> None:
+        """Согласовать дату оплаты со статусом.
+
+        Оплачен, но даты нет — ставим сегодняшнюю (today можно передать
+        явно, чтобы тесты не зависели от текущей даты).
+        Не оплачен — даты оплаты быть не должно.
+        """
+        if order.status == OrderStatus.PAID:
+            if order.paid_on is None:
+                order.paid_on = today or date.today()
+        else:
+            order.paid_on = None
+
+    def add_order(self, order: Order, today: date | None = None) -> Order:
+        self._validate_order(order)
+        self._sync_paid_on(order, today)
         return self._storage.add_order(order)
+
+    def update_order(self, order: Order, today: date | None = None) -> None:
+        self._validate_order(order)
+        self._sync_paid_on(order, today)
+        self._storage.update_order(order)
+
+    def get_order(self, order_id: int) -> Order | None:
+        return self._storage.get_order(order_id)
+
+    def delete_order(self, order_id: int) -> None:
+        self._storage.delete_order(order_id)
 
     def list_orders(self, status: OrderStatus | None = None,
                     search: str = "") -> list[Order]:
@@ -79,12 +120,9 @@ class OrderManager:
         if order is None:
             raise ValueError(f"Заказ {order_id} не найден")
         order.status = status
-        if status == OrderStatus.PAID:
-            # today можно передать явно — так тесты не зависят от текущей даты
-            order.paid_on = today or date.today()
-        else:
-            # Ушёл из «оплачен» — дата оплаты больше не актуальна
-            order.paid_on = None
+        # При повторной оплате дата обновляется на новую
+        order.paid_on = None
+        self._sync_paid_on(order, today)
         self._storage.update_order(order)
         return order
 

@@ -22,6 +22,7 @@ Storage ── InMemoryStorage (тесты, демо)
 | `core/manager.py` | `OrderManager`, `PeriodSummary` | Бизнес-логика |
 | `app/main_window.py` | `MainWindow` | Главное окно |
 | `app/dialogs.py` | `ClientDialog`, `OrderDialog` | Формы ввода |
+| `app/labels.py` | — | Русские подписи статусов и типов, формат денег и дат |
 | `config.py` | — | Чтение `config/config.ini`, строка подключения |
 | `migrate.py` | — | Применение SQL-миграций, учёт в `schema_migrations` |
 
@@ -32,3 +33,4 @@ Storage ── InMemoryStorage (тесты, демо)
 - Налог НПД: 4 % с оплат от физлиц, 6 % — от юрлиц и ИП.
 - Все SQL-запросы параметризованы (`%s`) — защита от SQL-инъекций.
 - Схема БД меняется только новыми файлами в `migrations/` (`002_...sql` и т. д.), старые не правятся.
+- Интерфейс не проверяет бизнес-правила сам: ошибки `OrderManager` (`ValueError`) и БД (`psycopg.Error`) показываются окном через `MainWindow._run`.
