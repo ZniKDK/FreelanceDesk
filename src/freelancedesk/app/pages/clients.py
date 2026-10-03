@@ -4,14 +4,19 @@ from decimal import Decimal
 
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices, QFont
-from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLineEdit, QMenu
+from PyQt6.QtWidgets import QDialog, QGridLayout, QHBoxLayout, QLineEdit, \
+    QMenu
 
 from freelancedesk.app.dialogs import ClientDialog
-from freelancedesk.app.labels import CLIENT_TYPE_SHORT
+from freelancedesk.app import animations
+from freelancedesk.app.labels import (
+    CLIENT_TYPE_LABELS, CLIENT_TYPE_SHORT, CONTACT_LABELS,
+)
 from freelancedesk.app.pages import Page
 from freelancedesk.app.theme import C, icon
 from freelancedesk.app.widgets import (
-    SortItem, button, fill_table, make_table, money_item, selected_id,
+    Card, SortItem, button, fill_table, label, make_table, money_item,
+    selected_id, wrapped_tip,
 )
 from freelancedesk.core.manager import contact_url
 from freelancedesk.core.models import Client, ContactMethod
@@ -65,6 +70,28 @@ class ClientsPage(Page):
         self.table.customContextMenuRequested.connect(self._show_menu)
         self.layout_.addWidget(self.table, 1)
 
+        # Карточка выбранного клиента: контакты и заметка целиком
+        self.details = Card()
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(24)
+        grid.setVerticalSpacing(4)
+        self.details_title = label("", "section")
+        self.details_contacts = label()
+        self.details_contacts.setTextFormat(Qt.TextFormat.RichText)
+        self.details_note = label()
+        self.details_note.setWordWrap(True)
+        self.details_note.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        grid.addWidget(self.details_title, 0, 0, 1, 2)
+        grid.addWidget(self.details_contacts, 1, 0,
+                       Qt.AlignmentFlag.AlignTop)
+        grid.addWidget(self.details_note, 1, 1, Qt.AlignmentFlag.AlignTop)
+        grid.setColumnStretch(1, 1)
+        self.details.body.addLayout(grid)
+        self.details.hide()
+        self.layout_.addWidget(self.details)
+        self.table.itemSelectionChanged.connect(self.show_details)
+
         actions = QHBoxLayout()
         edit_btn = button("Изменить", "pencil")
         edit_btn.clicked.connect(self.edit_client)
@@ -99,10 +126,11 @@ class ClientsPage(Page):
                 money_item(income),
                 SortItem(client.note),
             ]
-            # Обрезанный текст («Постоянны…») виден целиком при наведении
+            # Обрезанный текст («Постоянны…») виден целиком при наведении;
+            # длинная подсказка переносится по строкам
             for item in items:
                 if item.text():
-                    item.setToolTip(item.text())
+                    item.setToolTip(wrapped_tip(item.text()))
             # Предпочтительный способ связи — жирным
             if client.preferred_contact:
                 cell = items[CONTACT_COLUMNS[client.preferred_contact]]
@@ -113,6 +141,35 @@ class ClientsPage(Page):
                                 "связываться так")
             rows.append((client.id, items))
         fill_table(self.table, rows)
+        self.show_details()
+
+    def show_details(self) -> None:
+        """Показать карточку выделенного клиента под таблицей."""
+        client_id = selected_id(self.table)
+        client = (self.app.manager.get_client(client_id)
+                  if client_id is not None else None)
+        if client is None:
+            self.details.hide()
+            return
+        was_hidden = self.details.isHidden()
+        self.details_title.setText(
+            f"{client.name} · {CLIENT_TYPE_LABELS[client.client_type]}")
+        lines = []
+        values = {ContactMethod.EMAIL: client.email,
+                  ContactMethod.PHONE: client.phone,
+                  ContactMethod.MESSENGER: messenger_text(client)}
+        for method, value in values.items():
+            if value:
+                star = " ★" if method == client.preferred_contact else ""
+                lines.append(f"<span style='color:{C['text2']}'>"
+                             f"{CONTACT_LABELS[method]}:</span> "
+                             f"{value}{star}")
+        self.details_contacts.setText("<br>".join(lines)
+                                      or "Контакты не указаны")
+        self.details_note.setText(client.note or "Заметки нет")
+        self.details.show()
+        if was_hidden:
+            animations.fade_in(self.details, shift=0)
 
     def _need_client(self) -> int | None:
         client_id = selected_id(self.table)

@@ -58,6 +58,10 @@ class ColumnLayout(QObject):
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._header_menu)
         header.sectionResized.connect(self._section_resized)
+        # Столбцы всегда помещаются в ширину — горизонтальная прокрутка
+        # не нужна
+        table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Пересчитываем ширины, когда меняется размер области строк
         # (viewport). Размер самой таблицы не подходит: её событие приходит
         # раньше, чем обновится viewport, и столбцы отставали на шаг —
@@ -110,13 +114,47 @@ class ColumnLayout(QObject):
                 self.header.resizeSection(column, width)
 
     def _section_resized(self, column: int, _old: int, _new: int) -> None:
-        """Пользователь потянул границу — запоминаем новые доли."""
+        """Пользователь потянул границу — держим таблицу в её ширине
+        и запоминаем новые доли."""
         if not self.editing or self._quiet:
             return
+        with self._by_program():
+            self._keep_within_width(column)
         columns = self.visible_columns()
         total = sum(self.header.sectionSize(c) for c in columns) or 1
         for c in columns:
             self.weights[c] = self.header.sectionSize(c) * 100 / total
+
+    def _keep_within_width(self, column: int) -> None:
+        """Столбец не вылезает за край таблицы.
+
+        Если столбец расширили, место забираем у соседей справа (не уже
+        MIN_WIDTH); если отбирать уже не у кого — столбец упирается.
+        Если сузили — освободившееся место отдаём соседу справа, чтобы
+        у правого края не появлялась пустая полоса.
+        """
+        columns = self.visible_columns()
+        available = self.table.viewport().width()
+        overflow = sum(self.header.sectionSize(c) for c in columns) - available
+        position = columns.index(column)
+        right = columns[position + 1:] or columns[:position][::-1]
+        if overflow > 0:
+            for neighbour in right:
+                spare = self.header.sectionSize(neighbour) - MIN_WIDTH
+                take = min(spare, overflow)
+                if take > 0:
+                    self.header.resizeSection(
+                        neighbour, self.header.sectionSize(neighbour) - take)
+                    overflow -= take
+                if overflow <= 0:
+                    break
+            if overflow > 0:  # соседи уже минимальные — упираемся
+                self.header.resizeSection(
+                    column, self.header.sectionSize(column) - overflow)
+        elif overflow < 0 and right:
+            neighbour = right[0]
+            self.header.resizeSection(
+                neighbour, self.header.sectionSize(neighbour) - overflow)
 
     # ------------------------------------------------------------------
     # Режим настройки
