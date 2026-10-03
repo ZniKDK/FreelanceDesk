@@ -14,7 +14,9 @@ import pytest
 
 from freelancedesk.config import PROJECT_ROOT, build_dsn, load_config
 from freelancedesk.core.manager import OrderManager
-from freelancedesk.core.models import Client, ClientType, Order, OrderStatus
+from freelancedesk.core.models import (
+    Client, ClientType, Order, OrderStatus, Payment,
+)
 from freelancedesk.core.sql_storage import DB_ERRORS, DbStorage, SqliteStorage
 from freelancedesk.migrate import (
     apply_postgres_migrations, apply_sqlite_migrations,
@@ -50,10 +52,15 @@ def storage(request, tmp_path):
             pytest.skip("Тестовая БД PostgreSQL недоступна")
         # TRUNCATE очищает таблицы, RESTART IDENTITY сбрасывает счётчики id
         with psycopg.connect(dsn) as conn:
-            conn.execute("TRUNCATE orders, clients RESTART IDENTITY")
+            conn.execute("TRUNCATE payments, orders, clients RESTART IDENTITY")
         db = DbStorage(dsn)
     yield db
     db.close()
+
+
+@pytest.fixture
+def client(storage) -> Client:
+    return storage.add_client(Client(name="Иван"))
 
 
 def test_client_roundtrip(storage):
@@ -64,8 +71,7 @@ def test_client_roundtrip(storage):
     assert storage.get_client(saved.id) == saved
 
 
-def test_update_and_delete_client(storage):
-    client = storage.add_client(Client(name="Иван"))
+def test_update_and_delete_client(storage, client):
     client.contact = "@ivan"
     storage.update_client(client)
     assert storage.get_client(client.id).contact == "@ivan"
@@ -79,22 +85,19 @@ def test_update_missing_client_raises(storage):
         storage.update_client(Client(name="Нет такого", id=999))
 
 
-def test_order_roundtrip_keeps_types(storage):
-    client = storage.add_client(Client(name="Иван"))
+def test_order_roundtrip_keeps_types(storage, client):
     saved = storage.add_order(Order(
         title="Бот", client_id=client.id, amount=Decimal("1500.50"),
-        deadline=date(2026, 10, 10), status=OrderStatus.PAID,
-        paid_on=date(2026, 10, 3), description="ТЗ в переписке",
-        link="https://kwork.ru/track/1", receipt_issued=True))
+        deadline=date(2026, 10, 10), status=OrderStatus.DELIVERED,
+        delivered_on=date(2026, 10, 3), description="ТЗ в переписке",
+        link="https://kwork.ru/track/1"))
     loaded = storage.get_order(saved.id)
-    # Decimal, date, bool и enum должны вернуться из БД теми же типами
+    # Decimal, date и enum должны вернуться из БД теми же типами
     assert loaded == saved
     assert isinstance(loaded.amount, Decimal)
-    assert loaded.receipt_issued is True
 
 
-def test_update_order(storage):
-    client = storage.add_client(Client(name="Иван"))
+def test_update_order(storage, client):
     order = storage.add_order(Order(title="Бот", client_id=client.id,
                                     amount=Decimal("100")))
     order.amount = Decimal("250.75")
@@ -103,8 +106,7 @@ def test_update_order(storage):
     assert storage.get_order(order.id) == order
 
 
-def test_orders_sorted_by_deadline(storage):
-    client = storage.add_client(Client(name="Иван"))
+def test_orders_sorted_by_deadline(storage, client):
     for title, deadline in (("Без срока", None),
                             ("Поздний", date(2026, 12, 1)),
                             ("Ранний", date(2026, 10, 5))):
@@ -114,15 +116,52 @@ def test_orders_sorted_by_deadline(storage):
     assert titles == ["Ранний", "Поздний", "Без срока"]
 
 
-def test_db_rejects_order_for_missing_client(storage):
-    # Внешний ключ в БД — вторая линия защиты после OrderManager
+def test_payment_roundtrip_and_update(storage, client):
+    order = storage.add_order(Order(title="Бот", client_id=client.id,
+                                    amount=Decimal("1000")))
+    saved = storage.add_payment(Payment(order_id=order.id,
+                                        amount=Decimal("500.50"),
+                                        paid_on=date(2026, 10, 3)))
+    assert storage.get_payment(saved.id) == saved
+
+    saved.receipt_issued = True
+    storage.update_payment(saved)
+    loaded = storage.get_payment(saved.id)
+    assert loaded.receipt_issued is True
+    assert isinstance(loaded.amount, Decimal)
+
+
+def test_payments_sorted_by_date(storage, client):
+    order = storage.add_order(Order(title="Бот", client_id=client.id,
+                                    amount=Decimal("1000")))
+    for day in (20, 5, 12):
+        storage.add_payment(Payment(order_id=order.id, amount=Decimal("1"),
+                                    paid_on=date(2026, 10, day)))
+    assert [p.paid_on.day for p in storage.list_payments()] == [5, 12, 20]
+
+
+def test_delete_order_with_payments(storage, client):
+    order = storage.add_order(Order(title="Бот", client_id=client.id,
+                                    amount=Decimal("1000")))
+    storage.add_payment(Payment(order_id=order.id, amount=Decimal("100"),
+                                paid_on=date(2026, 10, 3)))
+    storage.delete_order(order.id)
+    assert storage.get_order(order.id) is None
+    assert storage.list_payments() == []
+
+
+def test_db_rejects_bad_references(storage):
+    # Внешние ключи в БД — вторая линия защиты после OrderManager
     with pytest.raises(DB_ERRORS):
         storage.add_order(Order(title="Бот", client_id=999,
                                 amount=Decimal("100")))
+    with pytest.raises(DB_ERRORS):
+        storage.add_payment(Payment(order_id=999, amount=Decimal("1"),
+                                    paid_on=date(2026, 10, 3)))
 
 
 def test_manager_summary_on_database(storage):
-    # Тот же сценарий, что и в test_manager.py, но на настоящей базе
+    # Тот же сценарий, что и в test_reports.py, но на настоящей базе
     manager = OrderManager(storage)
     person = manager.add_client(Client(name="Иван"))
     company = manager.add_client(Client(name="ООО",
@@ -130,8 +169,8 @@ def test_manager_summary_on_database(storage):
     for client, amount in ((person, "1000"), (company, "2000")):
         order = manager.add_order(Order(title="Заказ", client_id=client.id,
                                         amount=Decimal(amount)))
-        manager.change_status(order.id, OrderStatus.PAID,
-                              today=date(2026, 10, 2))
+        manager.add_payment(Payment(order_id=order.id, amount=Decimal(amount),
+                                    paid_on=date(2026, 10, 2)))
 
     result = manager.summary(date(2026, 10, 1), date(2026, 10, 31))
     assert result.income == Decimal("3000")

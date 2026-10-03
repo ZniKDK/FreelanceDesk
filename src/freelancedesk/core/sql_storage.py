@@ -19,7 +19,9 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
-from freelancedesk.core.models import Client, ClientType, Order, OrderStatus
+from freelancedesk.core.models import (
+    Client, ClientType, Order, OrderStatus, Payment,
+)
 from freelancedesk.core.storage import Storage
 
 # Ошибки любой из баз — интерфейс показывает их пользователю окном
@@ -39,7 +41,8 @@ class SqlStorage(Storage):
     # Порядок колонок в SELECT — используется в _to_client и _to_order
     _CLIENT_COLUMNS = "id, name, client_type, contact, platform, note"
     _ORDER_COLUMNS = ("id, title, client_id, amount, deadline, status,"
-                      " paid_on, description, link, receipt_issued")
+                      " delivered_on, description, link")
+    _PAYMENT_COLUMNS = "id, order_id, amount, paid_on, receipt_issued"
 
     @abstractmethod
     def _execute(self, sql: str, params: tuple = ()):
@@ -73,9 +76,18 @@ class SqlStorage(Storage):
             amount=Decimal(str(row["amount"])),
             deadline=to_date(row["deadline"]),
             status=OrderStatus(row["status"]),
-            paid_on=to_date(row["paid_on"]),
+            delivered_on=to_date(row["delivered_on"]),
             description=row["description"],
             link=row["link"],
+        )
+
+    @staticmethod
+    def _to_payment(row) -> Payment:
+        return Payment(
+            id=row["id"],
+            order_id=row["order_id"],
+            amount=Decimal(str(row["amount"])),
+            paid_on=to_date(row["paid_on"]),
             # SQLite хранит логическое значение числом 0/1
             receipt_issued=bool(row["receipt_issued"]),
         )
@@ -88,8 +100,13 @@ class SqlStorage(Storage):
     @staticmethod
     def _order_values(order: Order) -> tuple:
         return (order.title, order.client_id, order.amount, order.deadline,
-                order.status.value, order.paid_on, order.description,
-                order.link, order.receipt_issued)
+                order.status.value, order.delivered_on, order.description,
+                order.link)
+
+    @staticmethod
+    def _payment_values(payment: Payment) -> tuple:
+        return (payment.order_id, payment.amount, payment.paid_on,
+                payment.receipt_issued)
 
     # --- Клиенты ---
 
@@ -133,8 +150,8 @@ class SqlStorage(Storage):
     def add_order(self, order: Order) -> Order:
         row = self._execute(
             "INSERT INTO orders (title, client_id, amount, deadline, status,"
-            " paid_on, description, link, receipt_issued)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            " delivered_on, description, link)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             self._order_values(order),
         ).fetchone()
         return replace(order, id=row["id"])
@@ -142,14 +159,16 @@ class SqlStorage(Storage):
     def update_order(self, order: Order) -> None:
         cur = self._execute(
             "UPDATE orders SET title = %s, client_id = %s, amount = %s,"
-            " deadline = %s, status = %s, paid_on = %s, description = %s,"
-            " link = %s, receipt_issued = %s WHERE id = %s",
+            " deadline = %s, status = %s, delivered_on = %s,"
+            " description = %s, link = %s WHERE id = %s",
             self._order_values(order) + (order.id,),
         )
         if cur.rowcount == 0:
             raise KeyError(f"Заказ {order.id} не найден")
 
     def delete_order(self, order_id: int) -> None:
+        # Сначала платежи заказа: внешний ключ не даст удалить заказ с ними
+        self._execute("DELETE FROM payments WHERE order_id = %s", (order_id,))
         self._execute("DELETE FROM orders WHERE id = %s", (order_id,))
 
     def get_order(self, order_id: int) -> Order | None:
@@ -166,6 +185,42 @@ class SqlStorage(Storage):
             " ORDER BY deadline NULLS LAST, id"
         ).fetchall()
         return [self._to_order(row) for row in rows]
+
+    # --- Платежи ---
+
+    def add_payment(self, payment: Payment) -> Payment:
+        row = self._execute(
+            "INSERT INTO payments (order_id, amount, paid_on, receipt_issued)"
+            " VALUES (%s, %s, %s, %s) RETURNING id",
+            self._payment_values(payment),
+        ).fetchone()
+        return replace(payment, id=row["id"])
+
+    def update_payment(self, payment: Payment) -> None:
+        cur = self._execute(
+            "UPDATE payments SET order_id = %s, amount = %s, paid_on = %s,"
+            " receipt_issued = %s WHERE id = %s",
+            self._payment_values(payment) + (payment.id,),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(f"Платёж {payment.id} не найден")
+
+    def delete_payment(self, payment_id: int) -> None:
+        self._execute("DELETE FROM payments WHERE id = %s", (payment_id,))
+
+    def get_payment(self, payment_id: int) -> Payment | None:
+        row = self._execute(
+            f"SELECT {self._PAYMENT_COLUMNS} FROM payments WHERE id = %s",
+            (payment_id,),
+        ).fetchone()
+        return self._to_payment(row) if row else None
+
+    def list_payments(self) -> list[Payment]:
+        rows = self._execute(
+            f"SELECT {self._PAYMENT_COLUMNS} FROM payments"
+            " ORDER BY paid_on, id"
+        ).fetchall()
+        return [self._to_payment(row) for row in rows]
 
 
 class DbStorage(SqlStorage):
