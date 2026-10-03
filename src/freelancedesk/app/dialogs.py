@@ -4,7 +4,7 @@
 Проверки бизнес-правил делает OrderManager, а не форма.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from PyQt6.QtCore import QDate
@@ -14,13 +14,23 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit, QWidget,
 )
 
-from freelancedesk.app.labels import CLIENT_TYPE_LABELS, STATUS_LABELS
+from freelancedesk.app.labels import (
+    CLIENT_TYPE_LABELS, PLATFORMS, STATUS_LABELS,
+)
 from freelancedesk.core.models import Client, Order, OrderStatus
 
 
 def to_qdate(value: date) -> QDate:
     """datetime.date -> QDate (Qt хранит даты в своём классе)."""
     return QDate(value.year, value.month, value.day)
+
+
+def make_date_edit(value: date) -> QDateEdit:
+    """Поле даты с выпадающим календарём в формате ДД.ММ.ГГГГ."""
+    edit = QDateEdit(to_qdate(value))
+    edit.setCalendarPopup(True)
+    edit.setDisplayFormat("dd.MM.yyyy")
+    return edit
 
 
 def make_buttons(dialog: QDialog) -> QDialogButtonBox:
@@ -33,13 +43,24 @@ def make_buttons(dialog: QDialog) -> QDialogButtonBox:
     return buttons
 
 
+def row_widget(*widgets) -> QWidget:
+    """Несколько виджетов в одну строку формы (последний растягивается)."""
+    box = QWidget()
+    layout = QHBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    for widget in widgets[:-1]:
+        layout.addWidget(widget)
+    layout.addWidget(widgets[-1], 1)
+    return box
+
+
 class ClientDialog(QDialog):
     """Форма клиента. Если передан client — режим редактирования."""
 
     def __init__(self, client: Client | None = None, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Клиент" if client else "Новый клиент")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(420)
         # Запоминаем id, чтобы при редактировании вернуть того же клиента
         self._client_id = client.id if client else None
 
@@ -50,8 +71,11 @@ class ClientDialog(QDialog):
             self.type_combo.addItem(label, client_type)
         self.contact_edit = QLineEdit()
         self.contact_edit.setPlaceholderText("Telegram, e-mail, телефон")
-        self.platform_edit = QLineEdit()
-        self.platform_edit.setPlaceholderText("Kwork, FL.ru, напрямую…")
+        # Редактируемый список: можно выбрать площадку или вписать свою
+        self.platform_combo = QComboBox()
+        self.platform_combo.setEditable(True)
+        self.platform_combo.addItems(PLATFORMS)
+        self.platform_combo.setCurrentText("")
         self.note_edit = QPlainTextEdit()
         self.note_edit.setFixedHeight(70)
 
@@ -60,7 +84,7 @@ class ClientDialog(QDialog):
         form.addRow("Имя*:", self.name_edit)
         form.addRow("Тип:", self.type_combo)
         form.addRow("Контакт:", self.contact_edit)
-        form.addRow("Площадка:", self.platform_edit)
+        form.addRow("Площадка:", self.platform_combo)
         form.addRow("Заметка:", self.note_edit)
         form.addRow(make_buttons(self))
 
@@ -73,7 +97,7 @@ class ClientDialog(QDialog):
         self.type_combo.setCurrentIndex(
             self.type_combo.findData(client.client_type))
         self.contact_edit.setText(client.contact)
-        self.platform_edit.setText(client.platform)
+        self.platform_combo.setCurrentText(client.platform)
         self.note_edit.setPlainText(client.note)
 
     def accept(self) -> None:
@@ -90,7 +114,7 @@ class ClientDialog(QDialog):
             name=self.name_edit.text().strip(),
             client_type=self.type_combo.currentData(),
             contact=self.contact_edit.text().strip(),
-            platform=self.platform_edit.text().strip(),
+            platform=self.platform_combo.currentText().strip(),
             note=self.note_edit.toPlainText().strip(),
         )
 
@@ -99,13 +123,12 @@ class OrderDialog(QDialog):
     """Форма заказа. Если передан order — режим редактирования."""
 
     def __init__(self, clients: list[Client], order: Order | None = None,
-                 parent=None) -> None:
+                 parent=None, today: date | None = None) -> None:
         super().__init__(parent)
+        today = today or date.today()
         self.setWindowTitle("Заказ" if order else "Новый заказ")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(460)
         self._order_id = order.id if order else None
-        # Дату оплаты форма не показывает, но должна сохранить при изменении
-        self._paid_on = order.paid_on if order else None
 
         self.title_edit = QLineEdit()
         self.client_combo = QComboBox()
@@ -120,31 +143,44 @@ class OrderDialog(QDialog):
 
         # Дедлайн необязателен: флажок включает/выключает поле даты
         self.deadline_check = QCheckBox("есть срок")
-        self.deadline_edit = QDateEdit(QDate.currentDate().addDays(7))
-        self.deadline_edit.setCalendarPopup(True)  # выпадающий календарь
-        self.deadline_edit.setDisplayFormat("dd.MM.yyyy")
+        self.deadline_edit = make_date_edit(today + timedelta(days=7))
         self.deadline_check.toggled.connect(self.deadline_edit.setEnabled)
         self.deadline_check.setChecked(True)
-        deadline_row = QWidget()
-        row_layout = QHBoxLayout(deadline_row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.addWidget(self.deadline_check)
-        row_layout.addWidget(self.deadline_edit, 1)
 
         self.status_combo = QComboBox()
         for status, label in STATUS_LABELS.items():
             self.status_combo.addItem(label, status)
 
+        # Оплата: дату можно поправить (оплатили вчера, внесли сегодня) —
+        # от неё зависит, в каком месяце считать налог
+        self.paid_on_edit = make_date_edit(today)
+        self.receipt_check = QCheckBox("чек выбит в «Мой налог»")
+
+        self.link_edit = QLineEdit()
+        self.link_edit.setPlaceholderText("https://kwork.ru/…")
+        self.description_edit = QPlainTextEdit()
+        self.description_edit.setPlaceholderText("ТЗ, договорённости, заметки")
+        self.description_edit.setFixedHeight(90)
+
         form = QFormLayout(self)
         form.addRow("Название*:", self.title_edit)
         form.addRow("Клиент*:", self.client_combo)
         form.addRow("Сумма:", self.amount_spin)
-        form.addRow("Дедлайн:", deadline_row)
+        form.addRow("Дедлайн:", row_widget(self.deadline_check,
+                                           self.deadline_edit))
         form.addRow("Статус:", self.status_combo)
+        form.addRow("Оплачен:", row_widget(self.paid_on_edit,
+                                           self.receipt_check))
+        form.addRow("Ссылка:", self.link_edit)
+        form.addRow("Описание:", self.description_edit)
         form.addRow(make_buttons(self))
 
+        # Поля оплаты доступны только при статусе «Оплачен»
+        self.status_combo.currentIndexChanged.connect(
+            self._update_payment_fields)
         if order:
             self._fill(order)
+        self._update_payment_fields()
 
     def _fill(self, order: Order) -> None:
         self.title_edit.setText(order.title)
@@ -156,6 +192,19 @@ class OrderDialog(QDialog):
             self.deadline_edit.setDate(to_qdate(order.deadline))
         self.status_combo.setCurrentIndex(
             self.status_combo.findData(order.status))
+        if order.paid_on:
+            self.paid_on_edit.setDate(to_qdate(order.paid_on))
+        self.receipt_check.setChecked(order.receipt_issued)
+        self.link_edit.setText(order.link)
+        self.description_edit.setPlainText(order.description)
+
+    def _is_paid(self) -> bool:
+        return self.status_combo.currentData() == OrderStatus.PAID
+
+    def _update_payment_fields(self) -> None:
+        paid = self._is_paid()
+        self.paid_on_edit.setEnabled(paid)
+        self.receipt_check.setEnabled(paid)
 
     def accept(self) -> None:
         if not self.title_edit.text().strip():
@@ -165,7 +214,7 @@ class OrderDialog(QDialog):
 
     def order(self) -> Order:
         """Собрать объект Order из полей формы."""
-        status: OrderStatus = self.status_combo.currentData()
+        paid = self._is_paid()
         return Order(
             id=self._order_id,
             title=self.title_edit.text().strip(),
@@ -174,9 +223,10 @@ class OrderDialog(QDialog):
             amount=Decimal(f"{self.amount_spin.value():.2f}"),
             deadline=(self.deadline_edit.date().toPyDate()
                       if self.deadline_check.isChecked() else None),
-            status=status,
-            # Старую дату оплаты оставляем, только если заказ всё ещё оплачен;
-            # остальное решит OrderManager
-            paid_on=self._paid_on if status == OrderStatus.PAID else None,
+            status=self.status_combo.currentData(),
+            # Не оплачен — даты оплаты и чека нет, сколько бы ни стояло в полях
+            paid_on=self.paid_on_edit.date().toPyDate() if paid else None,
+            receipt_issued=self.receipt_check.isChecked() and paid,
+            link=self.link_edit.text().strip(),
+            description=self.description_edit.toPlainText().strip(),
         )
-
