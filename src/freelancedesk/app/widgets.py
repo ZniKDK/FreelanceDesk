@@ -1,14 +1,21 @@
-"""Общие виджеты и помощники для экранов приложения."""
+"""Общие виджеты и помощники для экранов приложения.
 
+Цвета берутся из theme.C в момент создания или отрисовки виджета,
+поэтому после смены темы новые виджеты сразу получают новые цвета.
+"""
+
+from collections.abc import Callable
 from decimal import Decimal
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QPoint, QPropertyAnimation, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFrame, QHeaderView, QLabel, QProgressBar,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
+    QHeaderView, QLabel, QProgressBar, QPushButton, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from freelancedesk.app import animations
 from freelancedesk.app.labels import format_money, format_short_money
 from freelancedesk.app.theme import C, chip_style, icon
 
@@ -23,7 +30,7 @@ def label(text: str = "", role: str = "") -> QLabel:
 
 
 def button(text: str, icon_name: str = "", kind: str = "",
-           icon_color: str = C["text2"]) -> QPushButton:
+           icon_color: str | None = None) -> QPushButton:
     """Кнопка с иконкой и видом из темы: primary, ghost, danger, chip."""
     widget = QPushButton(text)
     if kind:
@@ -34,6 +41,19 @@ def button(text: str, icon_name: str = "", kind: str = "",
     return widget
 
 
+def set_fitting_text(widget: QPushButton, text: str, padding: int = 30
+                     ) -> None:
+    """Задать текст кнопки и ширину, в которую он точно поместится.
+
+    Qt считает ширину кнопки без учёта отступов из QSS, поэтому
+    длинные подписи («Сдать сегодня 1») обрезались. Считаем сами:
+    ширина текста в пикселях + отступы слева и справа.
+    """
+    widget.setText(text)
+    width = widget.fontMetrics().horizontalAdvance(text) + padding
+    widget.setMinimumWidth(width)
+
+
 def chip(text: str, background: str, color: str) -> QLabel:
     """Метка-«таблетка» для статуса или оплаты."""
     widget = QLabel(text)
@@ -42,33 +62,38 @@ def chip(text: str, background: str, color: str) -> QLabel:
     return widget
 
 
-def thin_progress(value: float, color: str = C["success"]) -> QProgressBar:
+def bar_style(color: str) -> str:
+    """Стиль заполнения полоски прогресса нужного цвета."""
+    return f"QProgressBar::chunk {{ background: {color}; }}"
+
+
+def thin_progress(value: float, color: str | None = None) -> QProgressBar:
     """Тонкая полоска прогресса: value от 0 до 1."""
     bar = QProgressBar()
     bar.setRange(0, 100)
     bar.setValue(round(value * 100))
     bar.setTextVisible(False)
-    # Цвет заполнения меняем только у этой полоски
-    bar.setStyleSheet(f"QProgressBar::chunk {{ background: {color}; }}")
+    bar.setStyleSheet(bar_style(color or C["success"]))
     return bar
 
 
 def clear_layout(layout) -> None:
     """Убрать все виджеты из слоя.
 
-    setParent(None) сразу снимает виджет с экрана, а deleteLater удаляет
-    его безопасно, когда Qt закончит текущую обработку событий. Без
-    setParent старый виджет на мгновение остаётся видимым «призраком».
+    hide() сразу убирает виджет с экрана, deleteLater удаляет его
+    безопасно, когда Qt закончит текущую обработку событий.
+    (Раньше здесь был setParent(None) — от него виджет на миг
+    становился отдельным пустым окном.)
     """
     while layout.count():
         widget = layout.takeAt(0).widget()
         if widget is not None:
-            widget.setParent(None)
+            widget.hide()
             widget.deleteLater()
 
 
 class Card(QFrame):
-    """Белая карточка со скруглёнными углами (стиль #card в теме)."""
+    """Карточка со скруглёнными углами (стиль #card в теме)."""
 
     def __init__(self, title: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -89,6 +114,7 @@ class StatCard(Card):
         self.value = label("—", "value")
         self.hint = label("", "caption")
         self.hint.setWordWrap(True)
+        self._number: Decimal | None = None
         for widget in (self.caption, self.value, self.hint):
             self.body.addWidget(widget)
         self.body.addStretch(1)
@@ -96,6 +122,21 @@ class StatCard(Card):
     def set(self, value: str, hint: str = "") -> None:
         self.value.setText(value)
         self.hint.setText(hint)
+
+    def set_money(self, amount: Decimal, hint: str = "",
+                  kopecks: bool = False) -> None:
+        """Показать сумму; при изменении число плавно «досчитывает»."""
+        self.hint.setText(hint)
+        start = self._number if self._number is not None else Decimal("0")
+        self._number = amount
+
+        def show(value: float) -> None:
+            # Кадр анимации — float; округляем до копеек и переводим
+            # в Decimal через строку, чтобы не было «хвостов» float
+            self.value.setText(format_money(Decimal(str(round(value, 2))),
+                                            kopecks))
+
+        animations.count_up(self, float(start), float(amount), show)
 
 
 class SortItem(QTableWidgetItem):
@@ -187,24 +228,35 @@ class BarChart(QWidget):
 
     Внешние библиотеки графиков не нужны: столбцы — это прямоугольники,
     подписи — текст. Данные: список пар (подпись, значение).
+    При новых данных столбцы плавно вырастают.
     """
-
-    BAR_COLOR = QColor("#9dbcf0")
-    LAST_BAR_COLOR = QColor(C["accent"])  # текущий месяц — ярче
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._data: list[tuple[str, Decimal]] = []
+        self._grow = 1.0  # доля высоты столбцов, анимируется от 0 до 1
         self.setMinimumHeight(200)
 
     def set_data(self, data: list[tuple[str, Decimal]]) -> None:
+        changed = data != self._data
         self._data = data
+        if changed:
+            animations.progress_animation(self, self._set_grow, 600)
         self.update()  # попросить Qt перерисовать виджет (вызовет paintEvent)
+
+    def replay(self) -> None:
+        """Проиграть рост столбцов заново (при открытии экрана)."""
+        animations.progress_animation(self, self._set_grow, 600)
+
+    def _set_grow(self, value: float) -> None:
+        self._grow = value
+        self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 — имя задано Qt
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor(C["text2"]))
+        text_color = QColor(C["text2"])
+        painter.setPen(text_color)
 
         if not self._data or all(v == 0 for _, v in self._data):
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
@@ -216,26 +268,115 @@ class BarChart(QWidget):
         max_value = max(v for _, v in self._data)
         slot = area.width() / len(self._data)  # ширина места под столбец
         bar_width = min(slot * 0.62, 36)
-        painter.setPen(Qt.PenStyle.NoPen)
 
         for i, (caption, value) in enumerate(self._data):
             left = area.left() + i * slot
-            height = max(area.height() * float(value / max_value),
-                         2 if value > 0 else 0)
+            full = area.height() * float(value / max_value)
+            height = max(full * self._grow, 2 if value > 0 else 0)
             bar = QRectF(left + (slot - bar_width) / 2,
                          area.bottom() - height, bar_width, height)
-            is_last = i == len(self._data) - 1
-            painter.setBrush(self.LAST_BAR_COLOR if is_last
-                             else self.BAR_COLOR)
+            is_last = i == len(self._data) - 1  # текущий месяц — ярче
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(C["accent"] if is_last
+                                    else C["chart_bar"]))
             painter.drawRoundedRect(bar, 3, 3)
 
-            painter.setPen(QColor(C["text2"]))
+            painter.setPen(text_color)
             # Подпись месяца под столбцом
             painter.drawText(QRectF(left, area.bottom() + 4, slot, 18),
                              Qt.AlignmentFlag.AlignHCenter, caption)
-            # Сумма над столбцом (только если она есть)
-            if value > 0:
+            # Сумма над столбцом — когда столбец почти вырос
+            if value > 0 and self._grow > 0.8:
                 painter.drawText(QRectF(left, bar.top() - 18, slot, 16),
                                  Qt.AlignmentFlag.AlignHCenter,
                                  format_short_money(value))
-            painter.setPen(Qt.PenStyle.NoPen)
+
+
+class Toast(QFrame):
+    """Всплывающее уведомление внизу окна: «Статус: Сдан» [Показать].
+
+    Висит поверх содержимого (не в слое), выезжает снизу, через
+    несколько секунд тает. Кнопка действия необязательна.
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("toast")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 10, 10, 10)
+        layout.setSpacing(12)
+        self.text = QLabel()
+        self.action = QPushButton()
+        self.action.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.action.clicked.connect(self._on_action)
+        layout.addWidget(self.text)
+        layout.addWidget(self.action)
+        self._callback: Callable[[], None] | None = None
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        # Таймер скрытия: перезапускается при каждом новом сообщении
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.dismiss)
+        self.hide()
+
+    def show_message(self, text: str, action_text: str = "",
+                     callback: Callable[[], None] | None = None,
+                     timeout: int = 4000) -> None:
+        self.text.setText(text)
+        self._callback = callback
+        self.action.setVisible(bool(action_text and callback))
+        self.action.setText(action_text)
+        self.adjustSize()
+        end = self._home()
+        self.show()
+        self.raise_()  # поверх остальных виджетов окна
+        if animations.ENABLED:
+            self._animate(b"opacity", self._effect, 0.0, 1.0, 180)
+            self._animate(b"pos", self, end + QPoint(0, 16), end, 220)
+        else:
+            self._effect.setOpacity(1.0)
+            self.move(end)
+        self._timer.start(timeout)
+
+    # Отступ слева, который не занимать (ширина бокового меню)
+    left_margin = 0
+
+    def _home(self) -> QPoint:
+        """Место уведомления: по центру области экранов, над нижним краем."""
+        parent = self.parentWidget()
+        area = parent.width() - self.left_margin
+        return QPoint(self.left_margin + (area - self.width()) // 2,
+                      parent.height() - self.height() - 72)
+
+    def reposition(self) -> None:
+        """Вызывается при изменении размера окна."""
+        if self.isVisible():
+            self.move(self._home())
+
+    def dismiss(self) -> None:
+        if not self.isVisible():
+            return
+        if animations.ENABLED:
+            fade = self._animate(b"opacity", self._effect, 1.0, 0.0, 250)
+            fade.finished.connect(self.hide)
+        else:
+            self.hide()
+
+    def _on_action(self) -> None:
+        callback = self._callback
+        self.dismiss()
+        if callback is not None:
+            callback()
+
+    def _animate(self, prop: bytes, target, start, end, duration
+                 ) -> QPropertyAnimation:
+        animation = QPropertyAnimation(target, prop, self)
+        animation.setDuration(duration)
+        animation.setStartValue(start)
+        animation.setEndValue(end)
+        animation.setEasingCurve(animations.EASING)
+        # Храним ссылку, чтобы анимацию не удалил сборщик мусора
+        setattr(self, f"_anim_{prop.decode()}", animation)
+        animation.start()
+        return animation

@@ -7,13 +7,14 @@
 from datetime import date, timedelta
 from decimal import Decimal
 
-from PyQt6.QtCore import QDate
+from PyQt6.QtCore import QDate, QPropertyAnimation
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QWidget,
 )
 
+from freelancedesk.app import animations
 from freelancedesk.app.labels import (
     CLIENT_TYPE_LABELS, PLATFORMS, STATUS_LABELS, format_money,
 )
@@ -82,7 +83,22 @@ def make_form(dialog: QDialog) -> QFormLayout:
     return form
 
 
-class ClientDialog(QDialog):
+class Dialog(QDialog):
+    """Окно формы, которое плавно проявляется при открытии."""
+
+    def showEvent(self, event) -> None:  # noqa: N802 — имя задано Qt
+        super().showEvent(event)
+        if animations.ENABLED:
+            # windowOpacity — прозрачность всего окна от 0 до 1
+            self._show_animation = QPropertyAnimation(self, b"windowOpacity",
+                                                      self)
+            self._show_animation.setDuration(160)
+            self._show_animation.setStartValue(0.0)
+            self._show_animation.setEndValue(1.0)
+            self._show_animation.start()
+
+
+class ClientDialog(Dialog):
     """Форма клиента. Если передан client — режим редактирования."""
 
     def __init__(self, client: Client | None = None, parent=None) -> None:
@@ -147,7 +163,7 @@ class ClientDialog(QDialog):
         )
 
 
-class OrderDialog(QDialog):
+class OrderDialog(Dialog):
     """Форма заказа. Если передан order — режим редактирования.
 
     Оплаты здесь нет: деньги вносятся платежами в карточке заказа.
@@ -245,7 +261,7 @@ class OrderDialog(QDialog):
         )
 
 
-class PaymentDialog(QDialog):
+class PaymentDialog(Dialog):
     """Форма платежа: сколько пришло, когда и выбит ли чек.
 
     order_id — заказ, к которому относится платёж;

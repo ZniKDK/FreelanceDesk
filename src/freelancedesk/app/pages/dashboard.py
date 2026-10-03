@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QGridLayout, QHBoxLayout, QInputDialog, QListWidget, QListWidgetItem,
 )
 
+from freelancedesk.app import animations
 from freelancedesk.app.labels import (
     DAYS, MONTH_PREPOSITIONAL, ORDERS, deadline_text, format_date,
     format_long_date, format_money, format_month, plural,
@@ -102,17 +103,17 @@ class DashboardPage(Page):
             percent = min(100, int(month.income * 100 / goal))
             hint = (f"цель {format_money(Decimal(goal), False)}"
                     f" · {percent} %")
-            self.goal_bar.setValue(percent)
+            animations.animate_value(self.goal_bar, percent)
         else:
             hint = "цель не задана"
             self.goal_bar.setValue(0)
         self.goal_bar.setVisible(bool(goal))
-        self.income_card.set(format_money(month.income, False), hint)
+        self.income_card.set_money(month.income, hint)
 
         # Ждёт оплаты за сданную работу
         awaiting = manager.awaiting_payment()
-        self.awaiting_card.set(
-            format_money(awaiting.amount, False),
+        self.awaiting_card.set_money(
+            awaiting.amount,
             f"{awaiting.orders} {plural(awaiting.orders, ORDERS)} сдано, "
             "денег ещё нет" if awaiting.orders else "все сданные оплачены")
 
@@ -128,11 +129,10 @@ class DashboardPage(Page):
         else:
             tax_hint = (f"за {format_month(due.month)}: срок прошёл, "
                         "проверьте «Мой налог»")
-        self.tax_card.set(format_money(due.amount), tax_hint)
+        self.tax_card.set_money(due.amount, tax_hint, kopecks=True)
 
         self.net_card.caption.setText(f"На руки в {month_word}")
-        self.net_card.set(format_money(month.net, False),
-                          f"налог {format_money(month.tax)}")
+        self.net_card.set_money(month.net, f"налог {format_money(month.tax)}")
 
         self._fill_hot(today)
         self._fill_upcoming(today)

@@ -419,6 +419,13 @@ class OrderManager:
                           for o in orders)
                 for view in OrderView}
 
+    def order_views(self, order_id: int, today: date) -> list[OrderView]:
+        """В каких выборках сейчас находится заказ (кроме «Все»)."""
+        order = self._existing_order(order_id)
+        money = self.money(order_id)
+        return [view for view in OrderView if view != OrderView.ALL
+                and self._matches(view, order, money, today)]
+
     def attention(self, today: date) -> Attention:
         """Что горит: сдать сегодня, просрочено, платежи без чека."""
         counts = self.view_counts(today)
