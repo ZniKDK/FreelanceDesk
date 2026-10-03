@@ -32,7 +32,7 @@ Client 1 ──< Order 1 ──< Payment
 
 | Модуль | Классы | Назначение |
 |---|---|---|
-| `core/models.py` | `Client`, `Order`, `Payment`, `ClientType`, `OrderStatus` | Данные предметной области |
+| `core/models.py` | `Client`, `Order`, `Payment`, `ClientType`, `ContactMethod`, `OrderStatus` | Данные предметной области |
 | `core/storage.py` | `Storage`, `InMemoryStorage` | Интерфейс хранилища и хранилище в памяти |
 | `core/sql_storage.py` | `SqlStorage`, `SqliteStorage`, `DbStorage` | Хранение в SQLite и PostgreSQL |
 | `core/manager.py` | `OrderManager`, `OrderMoney`, `PaymentState`, `OrderView`, `PeriodSummary`, `TaxDue` | Бизнес-логика, деньги, выборки, отчёты, налог |
@@ -44,6 +44,7 @@ Client 1 ──< Order 1 ──< Payment
 | `app/dialogs.py` | `ClientDialog`, `OrderDialog`, `PaymentDialog` | Формы ввода |
 | `app/widgets.py` | `Card`, `StatCard`, `BarChart`, `SortItem`, `Toast` | Общие виджеты, уведомления |
 | `app/theme.py` | — | Светлая и тёмная палитры, стили QSS, палитра Qt, иконки Lucide |
+| `app/table_layout.py` | `ColumnLayout` | Доли ширины, порядок и видимость столбцов, режим настройки таблиц |
 | `app/animations.py` | — | Короткие анимации (появление, полоски, счёт чисел) с общим выключателем |
 | `app/labels.py` | — | Русские подписи, деньги, даты, сроки словами |
 | `config.py` | — | Папка данных пользователя, `config.ini`, выбор хранилища |
@@ -58,3 +59,4 @@ Client 1 ──< Order 1 ──< Payment
 - Схема БД меняется только новыми файлами в `migrations/sqlite/` и `migrations/postgresql/` с одинаковыми номерами; старые файлы не правятся. Миграции применяются при запуске.
 - Смена темы пересобирает стили и строит экраны заново: цвета виджетов берутся из `theme.C` в момент создания.
 - Палитра Qt (`QPalette`) задаётся вместе с QSS, иначе тёмный режим Windows перекрашивает стандартные окна и списки.
+- Контакты клиента проверяются в `OrderManager` (почта, телефон); ссылки «написать / позвонить» строит `contact_url`.

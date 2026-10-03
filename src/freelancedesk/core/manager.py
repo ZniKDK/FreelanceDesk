@@ -8,13 +8,15 @@
 - «на руки» = пришло − налог; «осталось получить» = цена − пришло.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import Enum
 
 from freelancedesk.core.models import (
-    OPEN_STATUSES, Client, ClientType, Order, OrderStatus, Payment,
+    OPEN_STATUSES, Client, ClientType, ContactMethod, Order, OrderStatus,
+    Payment,
 )
 from freelancedesk.core.storage import Storage
 
@@ -145,6 +147,40 @@ class ClientStats:
     income: Decimal
 
 
+# Почта: «что-то@что-то.что-то» без пробелов — простая, но надёжная проверка
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Телефон: только цифры, пробелы и знаки + ( ) -
+PHONE_CHARS_RE = re.compile(r"^[0-9+()\-\s]+$")
+
+
+def phone_digits(phone: str) -> str:
+    """Только цифры номера: '+7 (900) 000-00-00' -> '79000000000'."""
+    return re.sub(r"\D", "", phone)
+
+
+def contact_url(client: Client, method: ContactMethod) -> str | None:
+    """Ссылка, по которой можно написать клиенту или позвонить.
+
+    None — если контакта нет или для мессенджера нет ссылки (MAX).
+    """
+    if method == ContactMethod.EMAIL and client.email:
+        return f"mailto:{client.email}"
+    if method == ContactMethod.PHONE and client.phone:
+        return f"tel:+{phone_digits(client.phone)}"
+    if method == ContactMethod.MESSENGER and client.messenger:
+        handle = client.messenger.strip()
+        if "://" in handle:  # уже ссылка
+            return handle
+        name = handle.lstrip("@")
+        if client.messenger_app == "Telegram":
+            return f"https://t.me/{name}"
+        if client.messenger_app == "WhatsApp" and phone_digits(handle):
+            return f"https://wa.me/{phone_digits(handle)}"
+        if client.messenger_app == "VK":
+            return f"https://vk.com/{name}"
+    return None
+
+
 def month_start(day: date) -> date:
     """Первое число месяца, в котором находится day."""
     return day.replace(day=1)
@@ -176,8 +212,32 @@ class OrderManager:
 
     @staticmethod
     def _validate_client(client: Client) -> None:
-        if not client.name.strip():
+        """Проверить и привести в порядок данные клиента."""
+        client.name = client.name.strip()
+        client.email = client.email.strip()
+        client.phone = client.phone.strip()
+        client.messenger = client.messenger.strip()
+        if not client.name:
             raise ValueError("Имя клиента не может быть пустым")
+        if client.email and not EMAIL_RE.match(client.email):
+            raise ValueError(f"Почта «{client.email}» указана с ошибкой. "
+                             "Пример: name@mail.ru")
+        if client.phone and (not PHONE_CHARS_RE.match(client.phone)
+                             or not 10 <= len(phone_digits(client.phone))
+                             <= 15):
+            raise ValueError(f"Телефон «{client.phone}» указан с ошибкой. "
+                             "Пример: +7 900 000-00-00")
+        # Ник в Telegram без «@» — дописываем, так его узнают в поиске
+        if (client.messenger_app == "Telegram" and client.messenger
+                and not client.messenger.startswith("@")
+                and "://" not in client.messenger):
+            client.messenger = "@" + client.messenger
+        filled = {ContactMethod.EMAIL: client.email,
+                  ContactMethod.PHONE: client.phone,
+                  ContactMethod.MESSENGER: client.messenger}
+        if client.preferred_contact and not filled[client.preferred_contact]:
+            raise ValueError("Выбранный способ связи не заполнен — "
+                             "укажите контакт или выберите другой способ")
 
     def add_client(self, client: Client) -> Client:
         self._validate_client(client)

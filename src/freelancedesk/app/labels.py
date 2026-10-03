@@ -9,7 +9,9 @@ from datetime import date
 from decimal import Decimal
 
 from freelancedesk.core.manager import OrderView, PaymentState
-from freelancedesk.core.models import ClientType, Order, OrderStatus
+from freelancedesk.core.models import (
+    ClientType, ContactMethod, Order, OrderStatus,
+)
 
 STATUS_LABELS = {
     OrderStatus.NEW: "Новый",
@@ -27,6 +29,18 @@ PAYMENT_LABELS = {
 CLIENT_TYPE_LABELS = {
     ClientType.PERSON: "Физлицо (НПД 4 %)",
     ClientType.COMPANY: "Юрлицо / ИП (НПД 6 %)",
+}
+
+# Короткие подписи для таблицы клиентов
+CLIENT_TYPE_SHORT = {
+    ClientType.PERSON: "Физлицо",
+    ClientType.COMPANY: "Юрлицо / ИП",
+}
+
+CONTACT_LABELS = {
+    ContactMethod.EMAIL: "Почта",
+    ContactMethod.PHONE: "Телефон",
+    ContactMethod.MESSENGER: "Мессенджер",
 }
 
 # Подписи фильтров на экране «Заказы» — в порядке показа

@@ -16,10 +16,13 @@ from PyQt6.QtWidgets import (
 
 from freelancedesk.app import animations
 from freelancedesk.app.labels import (
-    CLIENT_TYPE_LABELS, PLATFORMS, STATUS_LABELS, format_money,
+    CLIENT_TYPE_LABELS, CONTACT_LABELS, PLATFORMS, STATUS_LABELS,
+    format_money,
 )
 from freelancedesk.app.widgets import AnimatedComboBox
-from freelancedesk.core.models import Client, Order, OrderStatus, Payment
+from freelancedesk.core.models import (
+    MESSENGER_APPS, Client, Order, OrderStatus, Payment,
+)
 
 
 def to_qdate(value: date) -> QDate:
@@ -115,8 +118,20 @@ class ClientDialog(Dialog):
         # addItem(текст, данные): пользователь видит текст, а мы читаем данные
         for client_type, text in CLIENT_TYPE_LABELS.items():
             self.type_combo.addItem(text, client_type)
-        self.contact_edit = QLineEdit()
-        self.contact_edit.setPlaceholderText("@telegram, почта или телефон")
+        # Контакты — по отдельности; заполнять все не обязательно
+        self.email_edit = QLineEdit()
+        self.email_edit.setPlaceholderText("name@mail.ru")
+        self.phone_edit = QLineEdit()
+        self.phone_edit.setPlaceholderText("+7 900 000-00-00")
+        self.messenger_app_combo = AnimatedComboBox()
+        self.messenger_app_combo.addItems(MESSENGER_APPS)
+        self.messenger_edit = QLineEdit()
+        self.messenger_edit.setPlaceholderText("@ник или номер")
+        # Как удобнее связаться: «Не важно» или один из трёх способов
+        self.preferred_combo = AnimatedComboBox()
+        self.preferred_combo.addItem("Не важно", None)
+        for method, text in CONTACT_LABELS.items():
+            self.preferred_combo.addItem(text, method)
         # Редактируемый список: можно выбрать площадку или вписать свою
         self.platform_combo = AnimatedComboBox()
         self.platform_combo.setEditable(True)
@@ -128,7 +143,11 @@ class ClientDialog(Dialog):
         form = make_form(self)
         form.addRow("Имя", self.name_edit)
         form.addRow("Тип", self.type_combo)
-        form.addRow("Контакт", self.contact_edit)
+        form.addRow("Почта", self.email_edit)
+        form.addRow("Телефон", self.phone_edit)
+        form.addRow("Мессенджер", row_widget(self.messenger_app_combo,
+                                             self.messenger_edit))
+        form.addRow("Связь удобнее", self.preferred_combo)
         form.addRow("Площадка", self.platform_combo)
         form.addRow("Заметка", self.note_edit)
         form.addRow(make_buttons(self))
@@ -141,7 +160,13 @@ class ClientDialog(Dialog):
         self.name_edit.setText(client.name)
         self.type_combo.setCurrentIndex(
             self.type_combo.findData(client.client_type))
-        self.contact_edit.setText(client.contact)
+        self.email_edit.setText(client.email)
+        self.phone_edit.setText(client.phone)
+        if client.messenger_app:
+            self.messenger_app_combo.setCurrentText(client.messenger_app)
+        self.messenger_edit.setText(client.messenger)
+        self.preferred_combo.setCurrentIndex(
+            self.preferred_combo.findData(client.preferred_contact))
         self.platform_combo.setCurrentText(client.platform)
         self.note_edit.setPlainText(client.note)
 
@@ -158,7 +183,13 @@ class ClientDialog(Dialog):
             id=self._client_id,
             name=self.name_edit.text().strip(),
             client_type=self.type_combo.currentData(),
-            contact=self.contact_edit.text().strip(),
+            email=self.email_edit.text().strip(),
+            phone=self.phone_edit.text().strip(),
+            messenger=self.messenger_edit.text().strip(),
+            # Мессенджер без ника — значит, его нет
+            messenger_app=(self.messenger_app_combo.currentText()
+                           if self.messenger_edit.text().strip() else ""),
+            preferred_contact=self.preferred_combo.currentData(),
             platform=self.platform_combo.currentText().strip(),
             note=self.note_edit.toPlainText().strip(),
         )

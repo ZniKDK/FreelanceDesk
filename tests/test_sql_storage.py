@@ -15,7 +15,7 @@ import pytest
 from freelancedesk.config import PROJECT_ROOT, build_dsn, load_config
 from freelancedesk.core.manager import OrderManager
 from freelancedesk.core.models import (
-    Client, ClientType, Order, OrderStatus, Payment,
+    Client, ClientType, ContactMethod, Order, OrderStatus, Payment,
 )
 from freelancedesk.core.sql_storage import DB_ERRORS, DbStorage, SqliteStorage
 from freelancedesk.migrate import (
@@ -72,12 +72,24 @@ def test_client_roundtrip(storage):
 
 
 def test_update_and_delete_client(storage, client):
-    client.contact = "@ivan"
+    client.messenger = "@ivan"
     storage.update_client(client)
-    assert storage.get_client(client.id).contact == "@ivan"
+    assert storage.get_client(client.id).messenger == "@ivan"
 
     storage.delete_client(client.id)
     assert storage.get_client(client.id) is None
+
+
+def test_client_contacts_roundtrip(storage):
+    saved = storage.add_client(Client(
+        name="Салон", email="lisa@mail.ru", phone="+7 900 000-00-00",
+        messenger="@lisa", messenger_app="Telegram",
+        preferred_contact=ContactMethod.MESSENGER))
+    assert storage.get_client(saved.id) == saved
+
+    saved.preferred_contact = None  # «не важно» — пустое значение в базе
+    storage.update_client(saved)
+    assert storage.get_client(saved.id).preferred_contact is None
 
 
 def test_update_missing_client_raises(storage):

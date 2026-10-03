@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from freelancedesk.core.models import OrderStatus
+from freelancedesk.core.models import ContactMethod, OrderStatus
 from freelancedesk.core.sql_storage import SqliteStorage
 from freelancedesk.migrate import apply_sqlite_migrations, migrations_dir
 
@@ -47,7 +47,8 @@ def test_v02_paid_orders_become_payments(tmp_path):
             "INSERT INTO orders (title, client_id, amount, status)"
             " VALUES ('В работе', 1, '700', 'in_progress')")
 
-    assert apply_sqlite_migrations(db) == ["003_payments.sql"]
+    # Применятся все следующие миграции: 003 (платежи) и дальше
+    assert apply_sqlite_migrations(db)[0] == "003_payments.sql"
 
     storage = SqliteStorage(db)
     paid, working = storage.list_orders()[0], storage.list_orders()[1]
@@ -83,3 +84,34 @@ def test_failed_migration_is_rolled_back(tmp_path):
         tables = {row[0] for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert "a" in tables and "b" not in tables
+
+
+def test_v03_contacts_are_split(tmp_path):
+    """Поле «Контакт» версии 0.3 раскладывается по новым полям."""
+    db = tmp_path / "app.db"
+    v03 = tmp_path / "v03"
+    v03.mkdir()
+    for path in sorted(migrations_dir("sqlite").glob("00[123]_*.sql")):
+        (v03 / path.name).write_text(path.read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+    apply_sqlite_migrations(db, v03)
+    contacts = ["lisa@mail.ru", "+7 (900) 000-00-00", "@ivan",
+                "vk.com/petr", ""]
+    with sqlite3.connect(db) as conn:
+        for i, contact in enumerate(contacts):
+            conn.execute("INSERT INTO clients (name, contact) VALUES (?, ?)",
+                         (f"Клиент {i}", contact))
+
+    assert apply_sqlite_migrations(db) == ["004_client_contacts.sql"]
+
+    storage = SqliteStorage(db)
+    email, phone, tg, vk, empty = storage.list_clients()
+    storage.close()
+    assert (email.email, email.preferred_contact) == (
+        "lisa@mail.ru", ContactMethod.EMAIL)
+    assert (phone.phone, phone.preferred_contact) == (
+        "+7 (900) 000-00-00", ContactMethod.PHONE)
+    assert (tg.messenger, tg.messenger_app) == ("@ivan", "Telegram")
+    assert (vk.messenger, vk.messenger_app) == ("vk.com/petr", "")
+    assert (empty.email, empty.phone, empty.messenger,
+            empty.preferred_contact) == ("", "", "", None)
