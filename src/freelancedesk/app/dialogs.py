@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from PyQt6.QtCore import QDate, QPropertyAnimation
 from PyQt6.QtWidgets import (
-    QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+    QCheckBox, QDateEdit, QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPlainTextEdit, QWidget,
 )
@@ -18,6 +18,7 @@ from freelancedesk.app import animations
 from freelancedesk.app.labels import (
     CLIENT_TYPE_LABELS, PLATFORMS, STATUS_LABELS, format_money,
 )
+from freelancedesk.app.widgets import AnimatedComboBox
 from freelancedesk.core.models import Client, Order, OrderStatus, Payment
 
 
@@ -110,14 +111,14 @@ class ClientDialog(Dialog):
 
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("Иван Петров или ООО «Ромашка»")
-        self.type_combo = QComboBox()
+        self.type_combo = AnimatedComboBox()
         # addItem(текст, данные): пользователь видит текст, а мы читаем данные
         for client_type, text in CLIENT_TYPE_LABELS.items():
             self.type_combo.addItem(text, client_type)
         self.contact_edit = QLineEdit()
         self.contact_edit.setPlaceholderText("@telegram, почта или телефон")
         # Редактируемый список: можно выбрать площадку или вписать свою
-        self.platform_combo = QComboBox()
+        self.platform_combo = AnimatedComboBox()
         self.platform_combo.setEditable(True)
         self.platform_combo.addItems(PLATFORMS)
         self.platform_combo.setCurrentText("")
@@ -181,7 +182,7 @@ class OrderDialog(Dialog):
 
         self.title_edit = QLineEdit()
         self.title_edit.setPlaceholderText("Telegram-бот для записи клиентов")
-        self.client_combo = QComboBox()
+        self.client_combo = AnimatedComboBox()
         for client in clients:
             self.client_combo.addItem(client.name, client.id)
 
@@ -193,7 +194,7 @@ class OrderDialog(Dialog):
         self.deadline_check.toggled.connect(self.deadline_edit.setEnabled)
         self.deadline_check.setChecked(True)
 
-        self.status_combo = QComboBox()
+        self.status_combo = AnimatedComboBox()
         for status, text in STATUS_LABELS.items():
             self.status_combo.addItem(text, status)
 

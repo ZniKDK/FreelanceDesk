@@ -29,6 +29,14 @@ from freelancedesk.app.theme import (
     C, THEME_MODES, apply_theme, icon, is_dark,
 )
 from freelancedesk.app.widgets import Toast, button, label
+
+
+def apply_ui_effects(enabled: bool) -> None:
+    """Встроенные эффекты Qt: плавное появление меню и подсказок."""
+    for effect in (Qt.UIEffect.UI_AnimateMenu, Qt.UIEffect.UI_FadeMenu,
+                   Qt.UIEffect.UI_AnimateTooltip,
+                   Qt.UIEffect.UI_FadeTooltip):
+        QApplication.setEffectEnabled(effect, enabled)
 from freelancedesk.core.manager import OrderManager
 from freelancedesk.core.sql_storage import DB_ERRORS
 
@@ -60,7 +68,7 @@ Ctrl+Q — выход
 class Sidebar(QFrame):
     """Боковое меню с плавно переезжающей подсветкой выбранного пункта."""
 
-    def __init__(self, window: "MainWindow", storage_label: str) -> None:
+    def __init__(self, window: "MainWindow") -> None:
         super().__init__()
         self.setObjectName("sidebar")
         self.setFixedWidth(210)
@@ -89,12 +97,6 @@ class Sidebar(QFrame):
             layout.addWidget(btn)
         layout.addStretch(1)
 
-        if storage_label:
-            where = label(storage_label, "caption")
-            where.setWordWrap(True)
-            where.setToolTip(storage_label)
-            layout.addWidget(where)
-            layout.addSpacing(6)
         self.settings_btn = button("  Настройки", "settings")
         self.settings_btn.setMenu(window.build_settings_menu())
         self.help_btn = button("  Справка", "circle-help")
@@ -158,6 +160,7 @@ class MainWindow(QMainWindow):
         self.resize(1260, 780)
         self.setMinimumSize(1040, 640)
 
+        apply_ui_effects(animations.ENABLED)
         self._build_shortcuts()
         self.toast = Toast(self)
         self._build_ui()
@@ -182,7 +185,7 @@ class MainWindow(QMainWindow):
         self.pages = [self.dashboard, self.orders, self.clients, self.finance]
         for page in self.pages:
             self.stack.addWidget(page)
-        self.sidebar = Sidebar(self, self._storage_label)
+        self.sidebar = Sidebar(self)
 
         central = QWidget()
         layout = QHBoxLayout(central)
@@ -218,17 +221,17 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         theme_menu = menu.addMenu(icon("sun"), "Тема")
         group = QActionGroup(theme_menu)  # выбор только одного варианта
-        theme_icons = {"light": "sun", "dark": "moon", "system": "monitor"}
+        # Без иконок: у отмеченного пункта видна галочка
         for mode, text in THEME_MODES:
-            action = theme_menu.addAction(icon(theme_icons[mode]), text)
+            action = theme_menu.addAction(text)
             action.setCheckable(True)
             action.setChecked(mode == self.theme_mode)
             action.triggered.connect(lambda _, m=mode: self.set_theme(m))
             group.addAction(action)
-        anim = menu.addAction(icon("sparkles"), "Анимации")
-        anim.setCheckable(True)
-        anim.setChecked(animations.ENABLED)
-        anim.toggled.connect(self.set_animations)
+        self.animations_action = menu.addAction("Анимации")
+        self.animations_action.setCheckable(True)
+        self.animations_action.setChecked(animations.ENABLED)
+        self.animations_action.toggled.connect(self.set_animations)
         if self._data_dir is not None:
             menu.addSeparator()
             menu.addAction(icon("folder-open"), "Открыть папку с данными",
@@ -263,8 +266,12 @@ class MainWindow(QMainWindow):
 
     def set_animations(self, enabled: bool) -> None:
         animations.set_enabled(enabled)
+        apply_ui_effects(enabled)
         if self._settings is not None:
             self._settings.setValue("animations", enabled)
+        # Сразу видно, что переключатель сработал
+        self.notify("Анимации включены" if enabled else
+                    "Анимации выключены — интерфейс без движения")
 
     def _rebuild(self) -> None:
         """Построить экраны заново, сохранив, где был пользователь."""
@@ -401,6 +408,7 @@ class MainWindow(QMainWindow):
             f"<b>FreelanceDesk {__version__}</b><br>"
             "Учёт заказов самозанятого фрилансера:<br>"
             "сроки, платежи, доход и налог НПД.<br><br>"
+            f"Данные: {self._storage_label or 'не сохраняются'}<br><br>"
             "Иконки — Lucide (ISC). Лицензия программы — MIT.<br>"
             "<a href='https://github.com/ZniKDK/FreelanceDesk'>GitHub</a>")
 

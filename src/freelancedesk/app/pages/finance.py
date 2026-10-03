@@ -90,7 +90,8 @@ class FinancePage(Page):
         top.addWidget(receipt_btn)
         journal.body.addLayout(top)
         self.table = make_table(PAYMENT_HEADERS, sort_column=1,
-                                descending=True)
+                                descending=True,
+                                empty=("Платежей за период нет", ""))
         self.table.activated.connect(self.open_selected_order)
         self.table.setMinimumHeight(180)
         # Таблица внутри карточки — своя рамка не нужна

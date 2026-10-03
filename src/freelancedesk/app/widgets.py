@@ -7,11 +7,15 @@
 from collections.abc import Callable
 from decimal import Decimal
 
-from PyQt6.QtCore import QPoint, QPropertyAnimation, QRectF, Qt, QTimer
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import (
+    QElapsedTimer, QEvent, QObject, QPoint, QPropertyAnimation, QRect,
+    QRectF, Qt, QTimer,
+)
+from PyQt6.QtGui import QColor, QFont, QPainter
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
-    QHeaderView, QLabel, QProgressBar, QPushButton, QTableWidget,
+    QAbstractItemView, QAbstractScrollArea, QComboBox, QFrame,
+    QGraphicsOpacityEffect, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -51,7 +55,8 @@ def set_fitting_text(widget: QPushButton, text: str, padding: int = 30
     """
     widget.setText(text)
     width = widget.fontMetrics().horizontalAdvance(text) + padding
-    widget.setMinimumWidth(width)
+    # Фиксированная ширина: кнопка не сжимается и не наезжает на соседей
+    widget.setFixedWidth(width)
 
 
 def chip(text: str, background: str, color: str) -> QLabel:
@@ -168,12 +173,21 @@ def money_item(amount: Decimal) -> SortItem:
 
 
 def make_table(headers: list[str], sort_column: int = 0,
-               descending: bool = False) -> QTableWidget:
+               descending: bool = False,
+               empty: tuple[str, str] = ("Здесь пока пусто", "")
+               ) -> QTableWidget:
     """Таблица только для чтения: выделение строк, сортировка по клику.
 
     sort_column — колонка, по которой таблица отсортирована при открытии.
+    empty — (заголовок, подсказка) на фоне пустой таблицы.
     """
-    table = QTableWidget(0, len(headers))
+    table = HintTable(0, len(headers))
+    table.empty_hint = empty
+    # Прокрутка по пикселям, а не рывками по строке или колонке
+    table.setHorizontalScrollMode(
+        QAbstractItemView.ScrollMode.ScrollPerPixel)
+    table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    SmoothScroller(table)
     table.setHorizontalHeaderLabels(headers)
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -380,3 +394,258 @@ class Toast(QFrame):
         setattr(self, f"_anim_{prop.decode()}", animation)
         animation.start()
         return animation
+
+
+# ----------------------------------------------------------------------
+# Пустое состояние на фоне списка или таблицы
+# ----------------------------------------------------------------------
+
+def paint_empty_hint(viewport: QWidget, title: str, subtitle: str) -> None:
+    """Нарисовать подсказку по центру пустого списка — бледно, на фоне."""
+    painter = QPainter(viewport)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    color = QColor(C["text2"])
+    color.setAlpha(120)  # полупрозрачный: текст «растворён» в фоне
+    painter.setPen(color)
+    rect = viewport.rect()
+    font = QFont(painter.font())
+    font.setPointSize(15)
+    font.setWeight(QFont.Weight.Bold)
+    painter.setFont(font)
+    title_rect = QRect(rect.left(), rect.center().y() - 34, rect.width(), 34)
+    painter.drawText(title_rect, Qt.AlignmentFlag.AlignCenter, title)
+    if subtitle:
+        font.setPointSize(10)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        color.setAlpha(100)
+        painter.setPen(color)
+        painter.drawText(QRect(rect.left() + 20, rect.center().y() + 4,
+                               rect.width() - 40, 40),
+                         Qt.AlignmentFlag.AlignHCenter
+                         | Qt.TextFlag.TextWordWrap, subtitle)
+
+
+class HintListWidget(QListWidget):
+    """Список, который на пустом фоне показывает бледную подсказку."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.empty_hint = ("Здесь пока пусто", "")
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        SmoothScroller(self)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — имя задано Qt
+        super().paintEvent(event)
+        if self.count() == 0:
+            paint_empty_hint(self.viewport(), *self.empty_hint)
+
+
+class HintTable(QTableWidget):
+    """Таблица, которая на пустом фоне показывает бледную подсказку."""
+
+    empty_hint = ("Здесь пока пусто", "")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 — имя задано Qt
+        super().paintEvent(event)
+        if self.rowCount() == 0:
+            paint_empty_hint(self.viewport(), *self.empty_hint)
+
+
+# ----------------------------------------------------------------------
+# Плавная прокрутка колёсиком
+# ----------------------------------------------------------------------
+
+class SmoothScroller(QObject):
+    """Плавная прокрутка колёсиком мыши для любой области прокрутки.
+
+    Обычно Qt прокручивает рывками по шагу. Здесь каждый щелчок колеса
+    задаёт цель, а полоса прокрутки плавно «доезжает» до неё. Несколько
+    быстрых щелчков складываются. Тачпад даёт точные пиксели — их
+    применяем сразу, без анимации.
+
+    horizontal=True — вертикальное колесо крутит область по горизонтали
+    (лента фильтров).
+    """
+
+    STEP = 90       # пикселей за один щелчок колеса
+    DURATION = 220  # мс
+
+    def __init__(self, area: QAbstractScrollArea,
+                 horizontal: bool = False) -> None:
+        super().__init__(area)
+        self.area = area
+        self.horizontal = horizontal
+        self._animation: QPropertyAnimation | None = None
+        self._target = 0
+        area.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 — имя задано Qt
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        angle = event.angleDelta()
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        sideways = self.horizontal or angle.y() == 0 or shift
+        bar = (self.area.horizontalScrollBar() if sideways
+               else self.area.verticalScrollBar())
+        if bar.maximum() == 0:
+            # Прокручивать нечего: ленту фильтров не отдаём странице
+            return self.horizontal
+        pixels = event.pixelDelta()
+        if not pixels.isNull():  # тачпад: движение уже плавное
+            delta = pixels.x() if (sideways and pixels.x()) else pixels.y()
+            bar.setValue(bar.value() - delta)
+            return True
+        notches = (angle.y() or angle.x()) / 120
+        running = (self._animation is not None and self._animation.state()
+                   == QPropertyAnimation.State.Running)
+        start = self._target if running else bar.value()
+        self._target = max(bar.minimum(),
+                           min(bar.maximum(),
+                               round(start - notches * self.STEP)))
+        if not animations.ENABLED:
+            bar.setValue(self._target)
+            return True
+        if self._animation is not None:
+            self._animation.stop()
+        self._animation = QPropertyAnimation(bar, b"value", self)
+        self._animation.setDuration(self.DURATION)
+        self._animation.setStartValue(bar.value())
+        self._animation.setEndValue(self._target)
+        self._animation.setEasingCurve(animations.EASING)
+        self._animation.start()
+        return True
+
+
+# ----------------------------------------------------------------------
+# Лента фильтров: колёсико и «свайп» мышью без полосы прокрутки
+# ----------------------------------------------------------------------
+
+class FilterStrip(QScrollArea):
+    """Горизонтальная лента кнопок без видимой полосы прокрутки.
+
+    Кнопки идут с одинаковым шагом и не сжимаются. Если места мало,
+    ленту можно крутить колёсиком или тянуть мышью («свайп»); после
+    рывка лента по инерции немного докатывается.
+    """
+
+    DRAG_THRESHOLD = 6  # пикселей: меньше — это щелчок, больше — свайп
+
+    def __init__(self, spacing: int = 6, parent=None) -> None:
+        super().__init__(parent)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Fixed)
+        content = QWidget()
+        content.setObjectName("filterStrip")
+        self.row = QHBoxLayout(content)
+        self.row.setContentsMargins(0, 2, 0, 2)
+        self.row.setSpacing(spacing)
+        # Минимальная ширина ленты = сумма ширин кнопок с отступами.
+        # Без этого область прокрутки сжимает ленту до видимой ширины,
+        # и кнопки наезжают друг на друга; а так лишнее прокручивается
+        self.row.setSizeConstraint(QHBoxLayout.SizeConstraint.SetMinimumSize)
+        self.row.addStretch(1)
+        self.setWidget(content)
+        SmoothScroller(self, horizontal=True)
+        self.viewport().installEventFilter(self)
+        # Состояние перетаскивания
+        self._press_x: int | None = None
+        self._start_value = 0
+        self._dragging = False
+        self._clock = QElapsedTimer()
+        self._last_x = 0
+        self._velocity = 0.0  # пикселей в миллисекунду
+
+    def add(self, widget: QWidget) -> None:
+        """Добавить кнопку в конец ленты (перед растяжкой)."""
+        self.row.insertWidget(self.row.count() - 1, widget)
+        widget.installEventFilter(self)  # свайп можно начать и с кнопки
+        self.setFixedHeight(widget.sizeHint().height() + 8)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 — имя задано Qt
+        kind = event.type()
+        bar = self.horizontalScrollBar()
+        left = getattr(event, "button", lambda: None)()
+        if kind == QEvent.Type.MouseButtonPress and \
+                left == Qt.MouseButton.LeftButton:
+            self._press_x = event.globalPosition().toPoint().x()
+            self._last_x = self._press_x
+            self._start_value = bar.value()
+            self._dragging = False
+            self._velocity = 0.0
+            self._clock.start()
+            return False  # щелчок по кнопке работает как обычно
+        if kind == QEvent.Type.MouseMove and self._press_x is not None:
+            x = event.globalPosition().toPoint().x()
+            moved = abs(x - self._press_x) > self.DRAG_THRESHOLD
+            if not self._dragging and moved and bar.maximum() > 0:
+                self._dragging = True
+                if isinstance(obj, QPushButton):
+                    obj.setDown(False)  # кнопка не «нажимается» при свайпе
+            if self._dragging:
+                elapsed = max(self._clock.restart(), 1)
+                self._velocity = (x - self._last_x) / elapsed
+                self._last_x = x
+                bar.setValue(self._start_value - (x - self._press_x))
+                return True
+            return False
+        if kind == QEvent.Type.MouseButtonRelease and \
+                self._press_x is not None:
+            was_dragging = self._dragging
+            self._press_x = None
+            self._dragging = False
+            if was_dragging:
+                self._coast(bar)
+                return True  # отпускание после свайпа — не щелчок
+        return False
+
+    def _coast(self, bar) -> None:
+        """Инерция после свайпа: лента докатывается и плавно тормозит."""
+        distance = round(self._velocity * 180)  # «пролёт» примерно за 0,2 с
+        if not animations.ENABLED or abs(distance) < 4:
+            return
+        target = max(0, min(bar.maximum(), bar.value() - distance))
+        self._coast_animation = QPropertyAnimation(bar, b"value", self)
+        self._coast_animation.setDuration(380)
+        self._coast_animation.setStartValue(bar.value())
+        self._coast_animation.setEndValue(target)
+        self._coast_animation.setEasingCurve(animations.EASING)
+        self._coast_animation.start()
+
+
+# ----------------------------------------------------------------------
+# Выпадающий список с плавным открытием
+# ----------------------------------------------------------------------
+
+class AnimatedComboBox(QComboBox):
+    """Выпадающий список, который открывается плавно: проявляется
+    и «разворачивается» вниз (или вверх, если открылся над полем)."""
+
+    def showPopup(self) -> None:  # noqa: N802 — имя задано Qt
+        super().showPopup()
+        if not animations.ENABLED:
+            return
+        popup = self.view().window()  # окошко со списком вариантов
+        end = popup.geometry()
+        above = end.top() < self.mapToGlobal(QPoint(0, 0)).y()
+        start = QRect(end)
+        start.setHeight(max(1, end.height() // 3))
+        if above:  # открылся вверх — разворачиваем от нижнего края
+            start.moveBottom(end.bottom())
+        popup.setWindowOpacity(0.0)
+        self._roll = QPropertyAnimation(popup, b"geometry", self)
+        self._roll.setDuration(170)
+        self._roll.setStartValue(start)
+        self._roll.setEndValue(end)
+        self._roll.setEasingCurve(animations.EASING)
+        self._fade = QPropertyAnimation(popup, b"windowOpacity", self)
+        self._fade.setDuration(150)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._roll.start()
+        self._fade.start()

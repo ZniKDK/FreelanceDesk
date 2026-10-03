@@ -12,10 +12,9 @@ from datetime import date
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QButtonGroup, QComboBox, QDialog, QFrame, QGraphicsOpacityEffect,
-    QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
-    QMenu, QProgressBar, QScrollArea, QSplitter, QStackedLayout,
-    QVBoxLayout, QWidget,
+    QButtonGroup, QDialog, QFrame, QGraphicsOpacityEffect, QGridLayout,
+    QHBoxLayout, QLineEdit, QListWidgetItem, QMenu, QProgressBar,
+    QScrollArea, QSplitter, QStackedLayout, QVBoxLayout, QWidget,
 )
 
 from freelancedesk.app import animations
@@ -29,6 +28,7 @@ from freelancedesk.app.theme import (
     C, icon, payment_bar_color, status_chip, tone_color,
 )
 from freelancedesk.app.widgets import (
+    AnimatedComboBox, FilterStrip, HintListWidget, SmoothScroller,
     bar_style, button, chip, clear_layout, label, set_fitting_text,
     thin_progress,
 )
@@ -129,9 +129,16 @@ class OrderPanel(QWidget):
 
         # Два состояния: «ничего не выбрано» и карточка заказа
         self.stack = QStackedLayout(self)
-        empty = label("Выберите заказ в списке,\nчтобы увидеть детали "
-                      "и платежи", "muted")
+        empty = label("Выберите заказ<br>"
+                      "<span style='font-size:10pt; font-weight:600'>"
+                      "детали и платежи появятся здесь</span>")
+        empty.setTextFormat(Qt.TextFormat.RichText)
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setStyleSheet(f"font-size: 15pt; font-weight: 700;"
+                            f" color: {C['text2']};")
+        faded = QGraphicsOpacityEffect(empty)
+        faded.setOpacity(0.55)  # подсказка «растворена» в фоне
+        empty.setGraphicsEffect(faded)
         self.stack.addWidget(empty)
         self.content = QWidget()
         self.stack.addWidget(self.content)
@@ -347,7 +354,7 @@ class OrdersPage(Page):
                                    QLineEdit.ActionPosition.LeadingPosition)
         self.search_edit.setMinimumWidth(280)
         self.search_edit.textChanged.connect(self._filters_changed)
-        self.sort_combo = QComboBox()
+        self.sort_combo = AnimatedComboBox()
         for key, text in SORTS.items():
             self.sort_combo.addItem(text, key)
         self.sort_combo.currentIndexChanged.connect(self.refresh)
@@ -358,8 +365,9 @@ class OrdersPage(Page):
             self.header.addWidget(widget)
 
         # --- Фильтры-«таблетки» с числом заказов ---
-        chips_row = QHBoxLayout()
-        chips_row.setSpacing(6)
+        # Лента: одинаковый шаг, кнопки по ширине текста; если не
+        # помещается — крутится колёсиком и тянется мышью
+        self.chip_strip = FilterStrip(spacing=6)
         self.chip_group = QButtonGroup(self)
         self.chips: dict[object, object] = {}
         for key in list(VIEW_LABELS) + [CANCELLED_KEY]:
@@ -368,13 +376,12 @@ class OrdersPage(Page):
             chip_btn.clicked.connect(self._filters_changed)
             self.chip_group.addButton(chip_btn)
             self.chips[key] = chip_btn
-            chips_row.addWidget(chip_btn)
-        chips_row.addStretch(1)
+            self.chip_strip.add(chip_btn)
         self.chips[OrderView.ACTIVE].setChecked(True)
-        self.layout_.addLayout(chips_row)
+        self.layout_.addWidget(self.chip_strip)
 
         # --- Список и карточка, разделённые перетаскиваемой границей ---
-        self.list = QListWidget()
+        self.list = HintListWidget()
         self.list.setObjectName("orderList")
         self.list.currentItemChanged.connect(self._selection_changed)
         self.list.itemDoubleClicked.connect(self.edit_order)
@@ -390,6 +397,7 @@ class OrdersPage(Page):
         scroll.setWidget(panel_frame)
         scroll.setWidgetResizable(True)
         scroll.setMinimumWidth(360)
+        SmoothScroller(scroll)
 
         splitter = QSplitter()
         splitter.addWidget(self.list)
@@ -496,11 +504,14 @@ class OrdersPage(Page):
             item.setSizeHint(row.sizeHint())
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
-        if not orders:
-            empty = QListWidgetItem("Здесь пусто. Смените фильтр или "
-                                    "создайте заказ кнопкой «Новый заказ».")
-            empty.setFlags(Qt.ItemFlag.NoItemFlags)  # нельзя выбрать
-            self.list.addItem(empty)
+        # Пустой список рисует подсказку на фоне (HintListWidget)
+        if self.search_edit.text().strip():
+            self.list.empty_hint = ("Ничего не нашлось",
+                                    "Попробуйте другое слово или фильтр")
+        else:
+            self.list.empty_hint = ("Здесь пусто",
+                                    "Смените фильтр или создайте заказ")
+        self.list.viewport().update()
         self.list.blockSignals(False)
 
         if keep_id is None or not self.select_order(keep_id):

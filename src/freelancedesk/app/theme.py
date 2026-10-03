@@ -159,6 +159,7 @@ def icon_file(name: str, color: str) -> str:
 def build_style() -> str:
     """Собрать таблицу стилей QSS из цветов текущей темы."""
     down = icon_file("chevron-down", C["text2"])
+    check = icon_file("check", C["accent"])
     up = icon_file("chevron-up", C["text2"])
     return f"""
 QWidget {{ color: {C['text']}; }}
@@ -304,9 +305,12 @@ QProgressBar::chunk {{ background: {C['success']}; border-radius: 3px; }}
 
 QMenu {{ background: {C['surface']}; color: {C['text']};
     border: 1px solid {C['border']}; padding: 4px; }}
-QMenu::item {{ padding: 6px 24px 6px 12px; border-radius: 4px; }}
+QMenu::item {{ padding: 6px 24px 6px 28px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {C['accent_bg']};
     color: {C['accent_text']}; }}
+QMenu::item:checked {{ color: {C['accent_text']}; }}
+QMenu::indicator {{ width: 16px; height: 16px; left: 6px; }}
+QMenu::indicator:checked {{ image: url({check}); }}
 QMenu::separator {{ height: 1px; background: {C['border']};
     margin: 4px 8px; }}
 QToolTip {{ background: {C['tooltip_bg']}; color: {C['tooltip_text']};

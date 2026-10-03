@@ -536,3 +536,101 @@ def test_animations_run_without_errors(window, manager):
     window.notify("Проверка")                # уведомление
     QApplication.processEvents()
     window.close()
+
+
+# --- Лента фильтров, прокрутка, подсказки ---
+
+def _narrow_strip(window):
+    """Сузить окно, чтобы фильтры не помещались и ленту можно было крутить."""
+    window.resize(1040, 700)
+    window.show()
+    window.show_page(ORDERS)
+    strip = window.orders.chip_strip
+    strip.setFixedWidth(300)
+    QApplication.processEvents()
+    return strip
+
+
+def test_filter_strip_equal_spacing(window):
+    window.show()
+    window.show_page(ORDERS)  # раскладка считается только у видимого экрана
+    window.resize(1040, 700)  # узкое окно: фильтры не помещаются целиком
+    QApplication.processEvents()
+    buttons = list(window.orders.chips.values())
+    gaps = {b2.x() - (b1.x() + b1.width())
+            for b1, b2 in zip(buttons, buttons[1:])}
+    window.close()
+    assert gaps == {6}  # одинаковый шаг, без наложений
+
+
+def test_filter_strip_swipe_scrolls_without_click(window):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtTest import QTest
+    strip = _narrow_strip(window)
+    bar = strip.horizontalScrollBar()
+    assert bar.maximum() > 0
+    target = window.orders.chips[OrderView.AWAITING_PAYMENT]
+    before = window.orders.current_filter_key()
+
+    # Тянем ленту влево мышью, начав прямо на кнопке
+    QTest.mousePress(target, Qt.MouseButton.LeftButton, pos=QPoint(10, 10))
+    for x in (0, -20, -60, -120):
+        QTest.mouseMove(target, QPoint(10 + x, 10))
+    QTest.mouseRelease(target, Qt.MouseButton.LeftButton,
+                       pos=QPoint(-110, 10))
+
+    assert bar.value() > 0
+    # Свайп — это не щелчок: фильтр не переключился
+    assert window.orders.current_filter_key() == before
+    window.close()
+
+
+def test_filter_strip_wheel_scrolls_horizontally(window):
+    from PyQt6.QtCore import QPoint, QPointF
+    from PyQt6.QtGui import QWheelEvent
+    strip = _narrow_strip(window)
+    bar = strip.horizontalScrollBar()
+    viewport = strip.viewport()
+    event = QWheelEvent(QPointF(10, 10), QPointF(viewport.mapToGlobal(
+        QPoint(10, 10))), QPoint(0, 0), QPoint(0, -120),
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase, False)
+    QApplication.sendEvent(viewport, event)
+    assert bar.value() > 0  # обычное колесо крутит ленту вбок
+    window.close()
+
+
+def test_empty_list_hint(window):
+    window.orders.set_filter(CANCELLED_KEY)
+    assert window.orders.list.count() == 0
+    assert window.orders.list.empty_hint[0] == "Здесь пусто"
+    window.orders.search_edit.setText("нет такого заказа")
+    assert window.orders.list.empty_hint[0] == "Ничего не нашлось"
+    window.orders.list.grab()  # подсказка рисуется без ошибок
+
+
+def test_sidebar_has_no_storage_path(manager):
+    secret = r"SQLite — C:\Users\someone\AppData\freelancedesk.db"
+    win = MainWindow(manager, today=lambda: TODAY, storage_label=secret)
+    from PyQt6.QtWidgets import QLabel
+    texts = [w.text() for w in win.sidebar.findChildren(QLabel)]
+    assert all(secret not in t for t in texts)
+
+
+def test_animations_toggle_notifies(window):
+    window.set_animations(False)
+    assert window.toast.text.text().startswith("Анимации выключены")
+    window.set_animations(True)
+    assert window.toast.text.text() == "Анимации включены"
+    window.set_animations(False)
+
+
+def test_animated_combo_popup(window):
+    from freelancedesk.app import animations
+    animations.set_enabled(True)
+    window.show()
+    combo = window.orders.sort_combo
+    combo.showPopup()
+    QApplication.processEvents()
+    combo.hidePopup()
+    window.close()
