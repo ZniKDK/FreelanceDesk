@@ -1,9 +1,12 @@
 """Экран «Финансы»: поступления за период, налог, площадки, диаграмма,
 журнал платежей для сверки с «Мой налог»."""
 
-from PyQt6.QtGui import QColor
+from pathlib import Path
+
+from PyQt6.QtCore import QUrl
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (
-    QButtonGroup, QGridLayout, QHBoxLayout, QVBoxLayout,
+    QButtonGroup, QFileDialog, QGridLayout, QHBoxLayout, QVBoxLayout,
 )
 
 from freelancedesk.app.dialogs import make_date_edit, to_qdate
@@ -16,6 +19,7 @@ from freelancedesk.app.widgets import (
     make_table, money_item, selected_id,
 )
 from freelancedesk.core.manager import add_months, month_end, month_start
+from freelancedesk.export import export_payments_csv
 
 PAYMENT_HEADERS = ["Заказ", "Дата", "Клиент", "Сумма", "Налог", "Чек"]
 PAYMENTS = ("платёж", "платежа", "платежей")
@@ -87,7 +91,11 @@ class FinancePage(Page):
         receipt_btn.setToolTip("Переключить отметку о чеке у выбранного "
                                "платежа")
         receipt_btn.clicked.connect(self.toggle_receipt)
+        csv_btn = button("Экспорт CSV", "external-link")
+        csv_btn.setToolTip("Сохранить платежи за период в CSV-файл")
+        csv_btn.clicked.connect(lambda: self.export_csv())
         top.addWidget(receipt_btn)
+        top.addWidget(csv_btn)
         journal.body.addLayout(top)
         self.table = make_table(PAYMENT_HEADERS, sort_column=1,
                                 descending=True,
@@ -183,6 +191,26 @@ class FinancePage(Page):
                 receipt,
             ]))
         fill_table(self.table, rows)
+
+    def export_csv(self, path: Path | None = None) -> None:
+        """Платежи за выбранный период — в CSV (для «Мой налог»)."""
+        start, end = self.period()
+        if path is None:
+            suggested = (Path.home() / "Documents" /
+                         f"платежи_{start:%d.%m.%Y}-{end:%d.%m.%Y}.csv")
+            chosen, _ = QFileDialog.getSaveFileName(
+                self, "Экспорт платежей", str(suggested), "CSV (*.csv)")
+            if not chosen:
+                return
+            path = Path(chosen)
+        try:
+            export_payments_csv(self.app.manager, path, start, end)
+        except OSError as exc:
+            self.app.show_error(f"Не удалось сохранить файл: {exc}")
+            return
+        self.app.notify(f"Сохранено: {path.name}", "Открыть папку",
+                        lambda: QDesktopServices.openUrl(
+                            QUrl.fromLocalFile(str(path.parent))))
 
     def toggle_receipt(self) -> None:
         payment_id = selected_id(self.table)

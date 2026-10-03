@@ -12,14 +12,19 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QSettings, Qt, QTimer, QUrl
+import sys
+
+from PyQt6.QtCore import QByteArray, QProcess, QSettings, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QFrame, QHBoxLayout, QMainWindow, QMenu,
+    QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout,
+    QMainWindow, QMenu,
     QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
 )
 
-from freelancedesk import __version__
+from freelancedesk import __version__, backup
+from freelancedesk.export import export_excel
+from freelancedesk.logs import LOG_NAME, log, log_dir
 from freelancedesk.app import animations
 from freelancedesk.app.pages.clients import ClientsPage
 from freelancedesk.app.pages.dashboard import DashboardPage
@@ -164,8 +169,11 @@ class MainWindow(QMainWindow):
                  today: Callable[[], date] = date.today,
                  settings: QSettings | None = None,
                  data_dir: Path | None = None,
-                 storage_label: str = "") -> None:
+                 storage_label: str = "",
+                 db_path: Path | None = None) -> None:
         super().__init__()
+        # Файл SQLite — для резервных копий (None: PostgreSQL или память)
+        self._db_path = db_path
         self.manager = manager
         self.today = today
         self._settings = settings
@@ -279,10 +287,23 @@ class MainWindow(QMainWindow):
             anim_group.addAction(action)
         menu.addAction(icon("list-checks"), "Настроить таблицы",
                        lambda: self.set_table_editing(True))
+        menu.addSeparator()
+        data = menu.addMenu(icon("folder-open"), "Данные")
+        data.addAction("Экспорт всех данных в Excel…",
+                       lambda: self.export_excel())
+        data.addSeparator()
+        for text, slot in (("Создать резервную копию", self.make_backup),
+                           ("Восстановить из копии…", self.restore_backup),
+                           ("Открыть папку копий", self.open_backups)):
+            action = data.addAction(text, slot)
+            if self._db_path is None:
+                action.setEnabled(False)
+                action.setToolTip("Копии делаются только для SQLite; "
+                                  "для PostgreSQL используйте pg_dump")
         if self._data_dir is not None:
-            menu.addSeparator()
-            menu.addAction(icon("folder-open"), "Открыть папку с данными",
-                           self.open_data_dir)
+            data.addSeparator()
+            data.addAction("Открыть папку с данными", self.open_data_dir)
+            data.addAction("Открыть журнал ошибок", self.open_log)
         return menu
 
     def build_help_menu(self) -> QMenu:
@@ -475,6 +496,81 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Справка и служебное
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Экспорт и резервные копии
+    # ------------------------------------------------------------------
+
+    def export_excel(self, path: Path | None = None) -> None:
+        """Все данные — в книгу Excel (заказы, платежи, клиенты)."""
+        if path is None:
+            suggested = (Path.home() / "Documents" /
+                         f"FreelanceDesk_{self.today():%d.%m.%Y}.xlsx")
+            chosen, _ = QFileDialog.getSaveFileName(
+                self, "Экспорт в Excel", str(suggested), "Excel (*.xlsx)")
+            if not chosen:
+                return
+            path = Path(chosen)
+        try:
+            export_excel(self.manager, path)
+        except OSError as exc:
+            self.show_error(f"Не удалось сохранить файл (возможно, он "
+                            f"открыт в Excel): {exc}")
+            return
+        log.info("Экспорт в Excel: %s", path)
+        self.notify(f"Сохранено: {path.name}", "Открыть папку",
+                    lambda: QDesktopServices.openUrl(
+                        QUrl.fromLocalFile(str(path.parent))))
+
+    def _backup_dir(self) -> Path:
+        return backup.backup_dir(self._data_dir or self._db_path.parent)
+
+    def make_backup(self) -> Path | None:
+        """Сделать резервную копию базы прямо сейчас."""
+        try:
+            path = backup.create_backup(self._db_path, self._backup_dir())
+        except Exception as exc:  # noqa: BLE001 — сообщаем о любой ошибке
+            log.exception("Не удалось создать копию")
+            self.show_error(f"Не удалось создать копию: {exc}")
+            return None
+        log.info("Резервная копия: %s", path)
+        self.notify("Резервная копия создана", "Открыть папку",
+                    self.open_backups)
+        return path
+
+    def restore_backup(self) -> None:
+        """Заменить базу выбранной копией и перезапустить программу."""
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Восстановить из копии", str(self._backup_dir()),
+            "Копии FreelanceDesk (*.db)")
+        if not chosen or not self.confirm(
+                "Заменить текущие данные выбранной копией?\n"
+                "Текущая база перед этим сама сохранится в копию.\n"
+                "Программа перезапустится."):
+            return
+        self.manager.close()
+        try:
+            backup.restore_backup(Path(chosen), self._db_path,
+                                  self._backup_dir())
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Не удалось восстановить копию")
+            self.show_error(f"Не удалось восстановить копию: {exc}\n"
+                            "Перезапустите программу.")
+            return
+        log.info("Восстановлено из копии: %s", chosen)
+        # Перезапуск: тот же исполняемый файл с теми же аргументами
+        QProcess.startDetached(sys.executable, sys.argv)
+        QApplication.quit()
+
+    def open_backups(self) -> None:
+        folder = self._backup_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def open_log(self) -> None:
+        path = log_dir(self._data_dir) / LOG_NAME
+        target = path if path.exists() else path.parent
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def open_data_dir(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._data_dir)))
