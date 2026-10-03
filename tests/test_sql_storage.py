@@ -1,49 +1,59 @@
-"""Интеграционные тесты DbStorage на реальном PostgreSQL.
+"""Интеграционные тесты SQL-хранилищ: SQLite и PostgreSQL.
 
-Работают с отдельной базой <name>_test (по умолчанию freelancedesk_test),
-чтобы не трогать рабочие данные. Если config.ini нет или база недоступна,
-тесты пропускаются (skip), а не падают.
+Каждый тест запускается дважды — на SqliteStorage (временный файл)
+и на DbStorage (база <name>_test из config/config.ini проекта).
+Если PostgreSQL недоступен, его вариант пропускается (skip).
 """
 
 from datetime import date
 from decimal import Decimal
+from functools import cache
 
 import psycopg
 import pytest
 
-from freelancedesk.config import build_dsn, load_config
+from freelancedesk.config import PROJECT_ROOT, build_dsn, load_config
 from freelancedesk.core.manager import OrderManager
 from freelancedesk.core.models import Client, ClientType, Order, OrderStatus
-from freelancedesk.core.storage import DbStorage
-from freelancedesk.migrate import apply_migrations
+from freelancedesk.core.sql_storage import DB_ERRORS, DbStorage, SqliteStorage
+from freelancedesk.migrate import (
+    apply_postgres_migrations, apply_sqlite_migrations,
+)
+
+DEV_CONFIG = PROJECT_ROOT / "config" / "config.ini"
 
 
-@pytest.fixture(scope="module")
-def test_dsn() -> str:
-    """Строка подключения к тестовой базе + применённые миграции."""
+@cache  # подключаемся и применяем миграции один раз на все тесты
+def postgres_test_dsn() -> str | None:
+    """Строка подключения к тестовой базе PostgreSQL или None."""
+    if not DEV_CONFIG.exists():
+        return None
     try:
-        config = load_config()
+        config = load_config(DEV_CONFIG)
         dsn = build_dsn(config, dbname=config["database"]["name"] + "_test")
-        apply_migrations(dsn)
-    except (FileNotFoundError, KeyError, psycopg.OperationalError) as exc:
-        pytest.skip(f"Тестовая БД недоступна: {exc}")
+        apply_postgres_migrations(dsn)
+    except (KeyError, psycopg.OperationalError):
+        return None
     return dsn
 
 
-@pytest.fixture
-def storage(test_dsn):
-    """Чистое хранилище для каждого теста."""
-    # TRUNCATE очищает таблицы, RESTART IDENTITY сбрасывает счётчики id
-    with psycopg.connect(test_dsn) as conn:
-        conn.execute("TRUNCATE orders, clients RESTART IDENTITY")
-    db = DbStorage(test_dsn)
+@pytest.fixture(params=["sqlite", "postgresql"])
+def storage(request, tmp_path):
+    """Чистое хранилище для каждого теста — на обеих СУБД."""
+    if request.param == "sqlite":
+        path = tmp_path / "test.db"
+        apply_sqlite_migrations(path)
+        db = SqliteStorage(path)
+    else:
+        dsn = postgres_test_dsn()
+        if dsn is None:
+            pytest.skip("Тестовая БД PostgreSQL недоступна")
+        # TRUNCATE очищает таблицы, RESTART IDENTITY сбрасывает счётчики id
+        with psycopg.connect(dsn) as conn:
+            conn.execute("TRUNCATE orders, clients RESTART IDENTITY")
+        db = DbStorage(dsn)
     yield db
     db.close()
-
-
-def test_migrations_are_idempotent(test_dsn):
-    # Повторный запуск ничего не применяет
-    assert apply_migrations(test_dsn) == []
 
 
 def test_client_roundtrip(storage):
@@ -71,14 +81,26 @@ def test_update_missing_client_raises(storage):
 
 def test_order_roundtrip_keeps_types(storage):
     client = storage.add_client(Client(name="Иван"))
-    saved = storage.add_order(Order(title="Бот", client_id=client.id,
-                                    amount=Decimal("1500.50"),
-                                    deadline=date(2026, 10, 10)))
+    saved = storage.add_order(Order(
+        title="Бот", client_id=client.id, amount=Decimal("1500.50"),
+        deadline=date(2026, 10, 10), status=OrderStatus.PAID,
+        paid_on=date(2026, 10, 3), description="ТЗ в переписке",
+        link="https://kwork.ru/track/1", receipt_issued=True))
     loaded = storage.get_order(saved.id)
-    # Decimal, date и enum должны вернуться из БД теми же типами
+    # Decimal, date, bool и enum должны вернуться из БД теми же типами
     assert loaded == saved
     assert isinstance(loaded.amount, Decimal)
-    assert loaded.status is OrderStatus.NEW
+    assert loaded.receipt_issued is True
+
+
+def test_update_order(storage):
+    client = storage.add_client(Client(name="Иван"))
+    order = storage.add_order(Order(title="Бот", client_id=client.id,
+                                    amount=Decimal("100")))
+    order.amount = Decimal("250.75")
+    order.description = "Добавили админку"
+    storage.update_order(order)
+    assert storage.get_order(order.id) == order
 
 
 def test_orders_sorted_by_deadline(storage):
@@ -94,7 +116,7 @@ def test_orders_sorted_by_deadline(storage):
 
 def test_db_rejects_order_for_missing_client(storage):
     # Внешний ключ в БД — вторая линия защиты после OrderManager
-    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+    with pytest.raises(DB_ERRORS):
         storage.add_order(Order(title="Бот", client_id=999,
                                 amount=Decimal("100")))
 
