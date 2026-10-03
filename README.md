@@ -1,5 +1,7 @@
 # FreelanceDesk
 
+[![tests](https://github.com/ZniKDK/FreelanceDesk/actions/workflows/tests.yml/badge.svg)](https://github.com/ZniKDK/FreelanceDesk/actions/workflows/tests.yml)
+
 Десктоп-приложение для самозанятого фрилансера: заказы, сроки, платежи, доход и налог НПД. Работает сразу после запуска, сервер базы данных не нужен.
 
 ![Заказы](docs/screenshot.png)
@@ -53,7 +55,11 @@
 | Ctrl+T | светлая / тёмная тема |
 | F5 | обновить |
 
-## Установка и запуск
+## Скачать
+
+Готовая программа для Windows — в разделе [Releases](https://github.com/ZniKDK/FreelanceDesk/releases): скачайте архив, распакуйте и запустите `FreelanceDesk.exe`. Python ставить не нужно.
+
+## Установка и запуск из исходников
 
 Нужен Python 3.11 или новее.
 
@@ -101,6 +107,14 @@ SQLite хватает для одного пользователя. Если н�
    CREATE DATABASE freelancedesk OWNER freelancedesk;
    ```
 2. В `%APPDATA%\FreelanceDesk\config.ini` укажите `backend = postgresql` и заполните секцию `[database]` (образец — `config/config.example.ini`).
+
+## Сборка exe
+
+```powershell
+.\build.ps1
+```
+
+Результат — `dist\FreelanceDesk\FreelanceDesk.exe` и архив `dist\FreelanceDesk-<версия>-windows.zip`. Иконка пересоздаётся командой `python tools/make_icon.py`.
 
 ## Тесты
 
