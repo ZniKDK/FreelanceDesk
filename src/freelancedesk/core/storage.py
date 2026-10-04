@@ -59,12 +59,15 @@ class InMemoryStorage(Storage):
     """Хранилище в оперативной памяти. Данные пропадают при выходе."""
 
     def __init__(self) -> None:
+        # Словари «id → объект» имитируют таблицы БД
         self._clients: dict[int, Client] = {}
         self._orders: dict[int, Order] = {}
+        # Счётчики id — аналог SERIAL в PostgreSQL
         self._next_client_id = 1
         self._next_order_id = 1
 
     def add_client(self, client: Client) -> Client:
+        # replace() создаёт копию с новым id — исходный объект не меняется
         saved = replace(client, id=self._next_client_id)
         self._clients[saved.id] = saved
         self._next_client_id += 1
@@ -76,6 +79,7 @@ class InMemoryStorage(Storage):
         self._clients[client.id] = client
 
     def delete_client(self, client_id: int) -> None:
+        # pop с None по умолчанию: удаление несуществующего id — не ошибка
         self._clients.pop(client_id, None)
 
     def get_client(self, client_id: int) -> Client | None:

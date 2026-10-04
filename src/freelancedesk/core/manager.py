@@ -30,6 +30,8 @@ class OrderManager:
     """Посредник между интерфейсом и хранилищем."""
 
     def __init__(self, storage: Storage) -> None:
+        # Хранилище передаётся снаружи: в программе — DbStorage,
+        # в тестах — InMemoryStorage. Менеджеру всё равно, какое именно.
         self._storage = storage
 
     # --- Клиенты ---
@@ -78,8 +80,10 @@ class OrderManager:
             raise ValueError(f"Заказ {order_id} не найден")
         order.status = status
         if status == OrderStatus.PAID:
+            # today можно передать явно — так тесты не зависят от текущей даты
             order.paid_on = today or date.today()
         else:
+            # Ушёл из «оплачен» — дата оплаты больше не актуальна
             order.paid_on = None
         self._storage.update_order(order)
         return order
@@ -98,6 +102,7 @@ class OrderManager:
                 continue
             if not start <= order.paid_on <= end:
                 continue
+            # Ставка зависит от того, кто платит: физлицо или юрлицо/ИП
             client = self._storage.get_client(order.client_id)
             client_type = client.client_type if client else ClientType.PERSON
             income += order.amount
