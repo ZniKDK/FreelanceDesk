@@ -2,7 +2,7 @@
 
 Десктоп-приложение для учёта заказов фрилансера: клиенты, заказы, статусы, доход за период и налог самозанятого (НПД).
 
-> Статус: в разработке (v0.1.0). Готова бизнес-логика с тестами, интерфейс и работа с БД — в процессе.
+> Статус: в разработке (v0.1.0). Готовы бизнес-логика и хранение в PostgreSQL с тестами; интерфейс — в процессе.
 
 ## Возможности (MVP)
 
@@ -26,16 +26,30 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Для работы с PostgreSQL:
+### База данных (PostgreSQL 14+)
 
-1. Создайте базу `freelancedesk` и выполните `migrations/001_init.sql`.
-2. Скопируйте `config/config.example.ini` в `config/config.ini` и укажите параметры подключения.
+1. Создайте пользователя и базу (в `psql` под `postgres`):
+   ```sql
+   CREATE ROLE freelancedesk LOGIN PASSWORD 'ваш_пароль';
+   CREATE DATABASE freelancedesk OWNER freelancedesk;
+   CREATE DATABASE freelancedesk_test OWNER freelancedesk;  -- для тестов
+   ```
+2. Скопируйте `config/config.example.ini` в `config/config.ini` и укажите пароль.
+3. Примените миграции:
+   ```powershell
+   $env:PYTHONPATH = "src"
+   python -m freelancedesk.migrate
+   ```
+
+Если база недоступна, приложение запускается в режиме «в памяти» (данные не сохраняются).
 
 ## Тесты
 
 ```powershell
 pytest
 ```
+
+Тесты `tests/test_db_storage.py` работают с базой `freelancedesk_test` и пропускаются, если она недоступна.
 
 ## Структура
 
@@ -44,7 +58,7 @@ src/freelancedesk/
 ├── core/          # логика без Qt: модели, хранилища, OrderManager
 └── app/           # интерфейс на PyQt6
 tests/             # unit-тесты
-migrations/        # SQL-схема БД
+migrations/        # SQL-миграции (применяет freelancedesk.migrate)
 config/            # шаблон настроек
 docs/              # архитектура
 ```
