@@ -102,3 +102,44 @@ def test_summary_ignores_unpaid_and_out_of_period(manager, person):
 
     assert result.income == Decimal("0")
     assert result.tax == Decimal("0.00")
+
+
+def test_update_order_validates_and_syncs_paid_on(manager, person):
+    order = manager.add_order(Order(title="Бот", client_id=person.id,
+                                    amount=Decimal("100")))
+    # Через форму поставили «Оплачен» — дата оплаты появляется сама
+    order.status = OrderStatus.PAID
+    manager.update_order(order, today=date(2026, 10, 2))
+    assert manager.get_order(order.id).paid_on == date(2026, 10, 2)
+
+    # Повторное сохранение оплаченного заказа не сдвигает дату оплаты
+    manager.update_order(order, today=date(2026, 10, 9))
+    assert manager.get_order(order.id).paid_on == date(2026, 10, 2)
+
+    order.title = ""
+    with pytest.raises(ValueError):
+        manager.update_order(order)
+
+
+def test_add_paid_order_gets_payment_date(manager, person):
+    order = manager.add_order(Order(title="Бот", client_id=person.id,
+                                    amount=Decimal("100"),
+                                    status=OrderStatus.PAID),
+                              today=date(2026, 10, 2))
+    assert order.paid_on == date(2026, 10, 2)
+
+
+def test_update_client_validates_name(manager, person):
+    person.name = ""
+    with pytest.raises(ValueError):
+        manager.update_client(person)
+
+
+def test_delete_order(manager, person):
+    order = manager.add_order(Order(title="Бот", client_id=person.id,
+                                    amount=Decimal("100")))
+    manager.delete_order(order.id)
+    assert manager.get_order(order.id) is None
+    # После удаления заказов клиента можно удалить
+    manager.delete_client(person.id)
+    assert manager.list_clients() == []

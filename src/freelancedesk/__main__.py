@@ -3,6 +3,7 @@
 import sys
 
 import psycopg
+from PyQt6.QtCore import QLibraryInfo, QTranslator
 from PyQt6.QtWidgets import QApplication
 
 from freelancedesk.app.main_window import MainWindow
@@ -23,11 +24,30 @@ def create_storage() -> Storage:
         return InMemoryStorage()
 
 
+def install_russian(app: QApplication) -> QTranslator:
+    """Перевести стандартные кнопки Qt (Cancel, Yes, No) на русский.
+
+    Переводы поставляются вместе с PyQt6. Переводчик возвращаем,
+    чтобы его не удалил сборщик мусора, пока работает приложение.
+    """
+    translator = QTranslator()
+    path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    if translator.load("qtbase_ru", path):
+        app.installTranslator(translator)
+    return translator
+
+
 def main() -> int:
     app = QApplication(sys.argv)
+    translator = install_russian(app)  # noqa: F841 — держим ссылку
     # Цепочка зависимостей: хранилище → менеджер → окно
-    manager = OrderManager(create_storage())
+    storage = create_storage()
+    manager = OrderManager(storage)
     window = MainWindow(manager)
+    if isinstance(storage, InMemoryStorage):
+        # Предупреждаем прямо в заголовке: консоль пользователь не видит
+        window.setWindowTitle(window.windowTitle()
+                              + " (нет БД — данные не сохраняются)")
     window.show()
     return app.exec()
 
