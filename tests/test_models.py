@@ -31,3 +31,16 @@ def test_delivered_order_is_not_overdue():
 
 def test_deadline_today_is_not_overdue():
     assert not make_order(deadline=TODAY).is_overdue(TODAY)
+
+
+def test_due_today_only_for_open_orders():
+    assert make_order(deadline=TODAY).is_due_on(TODAY)
+    assert not make_order(deadline=TODAY,
+                          status=OrderStatus.DELIVERED).is_due_on(TODAY)
+
+
+def test_needs_receipt_only_when_paid_without_receipt():
+    assert make_order(status=OrderStatus.PAID).needs_receipt()
+    assert not make_order(status=OrderStatus.PAID,
+                          receipt_issued=True).needs_receipt()
+    assert not make_order(status=OrderStatus.DELIVERED).needs_receipt()
