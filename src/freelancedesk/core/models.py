@@ -1,4 +1,9 @@
-"""Модели данных: клиент, заказ и их перечисления."""
+"""Модели данных: клиент, заказ, платёж и их перечисления.
+
+Работа и оплата у заказа независимы:
+- статус работы (новый → в работе → сдан) пользователь меняет сам;
+- оплата складывается из платежей — сколько денег реально пришло.
+"""
 
 from dataclasses import dataclass
 from datetime import date
@@ -14,20 +19,16 @@ class ClientType(Enum):
 
 
 class OrderStatus(Enum):
-    """Статус заказа."""
+    """Статус работы по заказу (оплата сюда не входит)."""
 
     NEW = "new"
     IN_PROGRESS = "in_progress"
     DELIVERED = "delivered"
-    PAID = "paid"
     CANCELLED = "cancelled"
 
 
-# Заказ «в работе», пока его не сдали: только у таких бывает просрочка
+# Работа ещё не сдана: только у таких заказов бывает просрочка
 OPEN_STATUSES = (OrderStatus.NEW, OrderStatus.IN_PROGRESS)
-# Активные — всё, что ещё не закрыто оплатой или отменой
-ACTIVE_STATUSES = (OrderStatus.NEW, OrderStatus.IN_PROGRESS,
-                   OrderStatus.DELIVERED)
 
 
 @dataclass
@@ -48,29 +49,35 @@ class Order:
 
     title: str
     client_id: int
-    amount: Decimal
+    amount: Decimal              # цена заказа — сколько ожидаем получить
     deadline: date | None = None
     status: OrderStatus = OrderStatus.NEW
-    paid_on: date | None = None  # дата оплаты, заполняется при статусе PAID
+    delivered_on: date | None = None  # когда сдан; ставится автоматически
     description: str = ""        # описание, ТЗ, заметки по заказу
     link: str = ""               # ссылка на заказ (Kwork, переписка, ТЗ)
-    receipt_issued: bool = False  # чек выбит в «Мой налог»
     id: int | None = None
 
     def is_overdue(self, today: date) -> bool:
-        """Дедлайн прошёл, а заказ ещё не сдан."""
+        """Дедлайн прошёл, а работа ещё не сдана."""
         if self.deadline is None:
             return False
         return self.status in OPEN_STATUSES and self.deadline < today
 
     def is_due_on(self, day: date) -> bool:
-        """Срок сдачи — в этот день, и заказ ещё не сдан."""
+        """Срок сдачи — в этот день, и работа ещё не сдана."""
         return self.status in OPEN_STATUSES and self.deadline == day
 
-    def needs_receipt(self) -> bool:
-        """Оплачен, но чек в «Мой налог» ещё не выбит.
 
-        По закону о НПД чек нужно сформировать при каждой оплате —
-        это легко забыть, поэтому программа напоминает.
-        """
-        return self.status == OrderStatus.PAID and not self.receipt_issued
+@dataclass
+class Payment:
+    """Поступление денег по заказу.
+
+    amount — сколько реально пришло (на Kwork — уже без комиссии
+    площадки): именно с этой суммы платится налог НПД.
+    """
+
+    order_id: int
+    amount: Decimal
+    paid_on: date
+    receipt_issued: bool = False  # чек выбит в «Мой налог»
+    id: int | None = None

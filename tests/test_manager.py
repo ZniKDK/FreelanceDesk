@@ -1,13 +1,17 @@
-"""Тесты OrderManager на хранилище в памяти."""
+"""Тесты OrderManager: клиенты, заказы, статусы работы, выборки."""
 
 from datetime import date
 from decimal import Decimal
 
 import pytest
 
-from freelancedesk.core.manager import OrderManager
-from freelancedesk.core.models import Client, ClientType, Order, OrderStatus
+from freelancedesk.core.manager import OrderManager, OrderView
+from freelancedesk.core.models import (
+    Client, ClientType, Order, OrderStatus, Payment,
+)
 from freelancedesk.core.storage import InMemoryStorage
+
+TODAY = date(2026, 10, 15)
 
 
 @pytest.fixture
@@ -16,18 +20,34 @@ def manager() -> OrderManager:
 
 
 @pytest.fixture
-def person(manager) -> Client:
-    return manager.add_client(Client(name="Иван"))
+def ivan(manager) -> Client:
+    return manager.add_client(Client(name="Иван", platform="Kwork"))
 
 
 @pytest.fixture
-def company(manager) -> Client:
-    return manager.add_client(
-        Client(name="ООО Ромашка", client_type=ClientType.COMPANY))
+def firm(manager) -> Client:
+    return manager.add_client(Client(name="ООО Ромашка", platform="FL.ru",
+                                     client_type=ClientType.COMPANY))
 
 
-def test_add_client_assigns_id(person):
-    assert person.id == 1
+def add(manager, client, title, amount="1000", **fields) -> Order:
+    """Короткий способ добавить заказ в тестах."""
+    return manager.add_order(
+        Order(title=title, client_id=client.id, amount=Decimal(amount),
+              **fields), today=TODAY)
+
+
+def pay(manager, order, amount, paid_on=TODAY, receipt=False) -> Payment:
+    return manager.add_payment(Payment(order_id=order.id,
+                                       amount=Decimal(amount),
+                                       paid_on=paid_on,
+                                       receipt_issued=receipt))
+
+
+# --- Клиенты ---
+
+def test_add_client_assigns_id(ivan):
+    assert ivan.id == 1
 
 
 def test_empty_client_name_rejected(manager):
@@ -35,111 +55,158 @@ def test_empty_client_name_rejected(manager):
         manager.add_client(Client(name="   "))
 
 
+def test_update_client_validates_name(manager, ivan):
+    ivan.name = ""
+    with pytest.raises(ValueError):
+        manager.update_client(ivan)
+
+
+def test_clients_sorted_case_insensitive(manager):
+    for name in ("яндекс", "Борис", "алина"):
+        manager.add_client(Client(name=name))
+    assert [c.name for c in manager.list_clients()] == [
+        "алина", "Борис", "яндекс"]
+
+
+def test_cannot_delete_client_with_orders(manager, ivan):
+    order = add(manager, ivan, "Бот")
+    with pytest.raises(ValueError):
+        manager.delete_client(ivan.id)
+    manager.delete_order(order.id)
+    manager.delete_client(ivan.id)
+    assert manager.list_clients() == []
+
+
+def test_client_stats(manager, ivan, firm):
+    paid = add(manager, ivan, "Оплачен", "1500")
+    pay(manager, paid, "1500")
+    add(manager, ivan, "В работе", "700")
+    stats = manager.client_stats()
+    assert stats[ivan.id].orders == 2
+    assert stats[ivan.id].income == Decimal("1500")
+    assert firm.id not in stats  # заказов нет — нет и строки
+
+
+# --- Заказы ---
+
 def test_order_for_unknown_client_rejected(manager):
     with pytest.raises(ValueError):
         manager.add_order(Order(title="Бот", client_id=99,
                                 amount=Decimal("100")))
 
 
-def test_negative_amount_rejected(manager, person):
+def test_negative_amount_rejected(manager, ivan):
     with pytest.raises(ValueError):
-        manager.add_order(Order(title="Бот", client_id=person.id,
-                                amount=Decimal("-1")))
+        add(manager, ivan, "Бот", "-1")
 
 
-def test_cannot_delete_client_with_orders(manager, person):
-    manager.add_order(Order(title="Бот", client_id=person.id,
-                            amount=Decimal("100")))
-    with pytest.raises(ValueError):
-        manager.delete_client(person.id)
-
-
-def test_filter_by_status_and_search(manager, person):
-    bot = manager.add_order(Order(title="Telegram-бот", client_id=person.id,
-                                  amount=Decimal("100")))
-    manager.add_order(Order(title="Парсер", client_id=person.id,
-                            amount=Decimal("200")))
-    manager.change_status(bot.id, OrderStatus.IN_PROGRESS)
-
-    assert [o.title for o in manager.list_orders(
-        status=OrderStatus.IN_PROGRESS)] == ["Telegram-бот"]
-    assert [o.title for o in manager.list_orders(search="парс")] == ["Парсер"]
-
-
-def test_paid_status_sets_and_clears_payment_date(manager, person):
-    order = manager.add_order(Order(title="Бот", client_id=person.id,
-                                    amount=Decimal("100")))
-    paid = manager.change_status(order.id, OrderStatus.PAID,
-                                 today=date(2026, 10, 2))
-    assert paid.paid_on == date(2026, 10, 2)
-
-    reopened = manager.change_status(order.id, OrderStatus.DELIVERED)
-    assert reopened.paid_on is None
-
-
-def test_summary_uses_rate_by_client_type(manager, person, company):
-    day = date(2026, 10, 2)
-    for client, amount in ((person, "1000"), (company, "2000")):
-        order = manager.add_order(Order(title="Заказ", client_id=client.id,
-                                        amount=Decimal(amount)))
-        manager.change_status(order.id, OrderStatus.PAID, today=day)
-
-    result = manager.summary(date(2026, 10, 1), date(2026, 10, 31))
-
-    assert result.income == Decimal("3000")
-    assert result.tax == Decimal("160.00")  # 1000 * 4 % + 2000 * 6 %
-    assert result.net == Decimal("2840.00")
-
-
-def test_summary_ignores_unpaid_and_out_of_period(manager, person):
-    manager.add_order(Order(title="Не оплачен", client_id=person.id,
-                            amount=Decimal("500")))
-    old = manager.add_order(Order(title="Старый", client_id=person.id,
-                                  amount=Decimal("700")))
-    manager.change_status(old.id, OrderStatus.PAID, today=date(2026, 9, 1))
-
-    result = manager.summary(date(2026, 10, 1), date(2026, 10, 31))
-
-    assert result.income == Decimal("0")
-    assert result.tax == Decimal("0.00")
-
-
-def test_update_order_validates_and_syncs_paid_on(manager, person):
-    order = manager.add_order(Order(title="Бот", client_id=person.id,
-                                    amount=Decimal("100")))
-    # Через форму поставили «Оплачен» — дата оплаты появляется сама
-    order.status = OrderStatus.PAID
-    manager.update_order(order, today=date(2026, 10, 2))
-    assert manager.get_order(order.id).paid_on == date(2026, 10, 2)
-
-    # Повторное сохранение оплаченного заказа не сдвигает дату оплаты
-    manager.update_order(order, today=date(2026, 10, 9))
-    assert manager.get_order(order.id).paid_on == date(2026, 10, 2)
-
+def test_empty_title_rejected_on_update(manager, ivan):
+    order = add(manager, ivan, "Бот")
     order.title = ""
     with pytest.raises(ValueError):
         manager.update_order(order)
 
 
-def test_add_paid_order_gets_payment_date(manager, person):
-    order = manager.add_order(Order(title="Бот", client_id=person.id,
-                                    amount=Decimal("100"),
-                                    status=OrderStatus.PAID),
-                              today=date(2026, 10, 2))
-    assert order.paid_on == date(2026, 10, 2)
+def test_link_gets_scheme(manager, ivan):
+    order = add(manager, ivan, "Бот", link="  kwork.ru/track/1 ")
+    assert order.link == "https://kwork.ru/track/1"
 
 
-def test_update_client_validates_name(manager, person):
-    person.name = ""
-    with pytest.raises(ValueError):
-        manager.update_client(person)
-
-
-def test_delete_order(manager, person):
-    order = manager.add_order(Order(title="Бот", client_id=person.id,
-                                    amount=Decimal("100")))
+def test_delete_order_removes_payments(manager, ivan):
+    order = add(manager, ivan, "Бот")
+    pay(manager, order, "500")
     manager.delete_order(order.id)
     assert manager.get_order(order.id) is None
-    # После удаления заказов клиента можно удалить
-    manager.delete_client(person.id)
-    assert manager.list_clients() == []
+    assert manager.payments_in_period(date(2000, 1, 1), TODAY) == []
+
+
+# --- Статус работы ---
+
+def test_delivering_sets_and_reopening_clears_date(manager, ivan):
+    order = add(manager, ivan, "Бот")
+    delivered = manager.change_status(order.id, OrderStatus.DELIVERED,
+                                      today=TODAY)
+    assert delivered.delivered_on == TODAY
+
+    reopened = manager.change_status(order.id, OrderStatus.IN_PROGRESS)
+    assert reopened.delivered_on is None
+
+
+def test_same_status_keeps_delivery_date(manager, ivan):
+    order = add(manager, ivan, "Бот", status=OrderStatus.DELIVERED,
+                delivered_on=date(2026, 10, 2))
+    manager.change_status(order.id, OrderStatus.DELIVERED, today=TODAY)
+    assert manager.get_order(order.id).delivered_on == date(2026, 10, 2)
+
+
+def test_status_does_not_depend_on_payment(manager, ivan):
+    # Предоплата за заказ, который ещё в работе — так бывает на Kwork
+    order = add(manager, ivan, "Бот", status=OrderStatus.IN_PROGRESS)
+    pay(manager, order, "1000")
+    assert manager.get_order(order.id).status == OrderStatus.IN_PROGRESS
+
+
+# --- Выборки и поиск ---
+
+@pytest.fixture
+def board(manager, ivan):
+    """Набор заказов на все выборки."""
+    add(manager, ivan, "Просрочен", deadline=date(2026, 10, 1))
+    add(manager, ivan, "Сегодня", deadline=TODAY)
+    waiting = add(manager, ivan, "Ждёт оплаты", status=OrderStatus.DELIVERED)
+    pay(manager, waiting, "400", receipt=True)
+    done = add(manager, ivan, "Закрыт", status=OrderStatus.DELIVERED)
+    pay(manager, done, "1000")  # без чека
+    add(manager, ivan, "Отменён", status=OrderStatus.CANCELLED)
+    return manager
+
+
+def titles(manager, view, **kwargs):
+    return sorted(o.title for o in manager.list_orders(view=view, today=TODAY,
+                                                       **kwargs))
+
+
+def test_views(board):
+    assert titles(board, OrderView.ACTIVE) == [
+        "Ждёт оплаты", "Просрочен", "Сегодня"]
+    assert titles(board, OrderView.AWAITING_PAYMENT) == ["Ждёт оплаты"]
+    assert titles(board, OrderView.OVERDUE) == ["Просрочен"]
+    assert titles(board, OrderView.DUE_TODAY) == ["Сегодня"]
+    assert titles(board, OrderView.NO_RECEIPT) == ["Закрыт"]
+    assert titles(board, OrderView.DONE) == ["Закрыт"]
+    assert len(titles(board, OrderView.ALL)) == 5
+
+
+def test_view_counts_and_attention(board):
+    counts = board.view_counts(TODAY)
+    assert counts[OrderView.ACTIVE] == 3
+    attention = board.attention(TODAY)
+    assert (attention.overdue, attention.due_today,
+            attention.no_receipt) == (1, 1, 1)
+    assert attention.total == 3
+
+
+def test_status_filter(board):
+    assert titles(board, OrderView.ALL,
+                  status=OrderStatus.CANCELLED) == ["Отменён"]
+
+
+def test_search_by_description_and_client(manager, ivan, firm):
+    add(manager, ivan, "Бот", description="интеграция с CRM")
+    add(manager, firm, "Лендинг")
+
+    def found(text):
+        return [o.title for o in manager.list_orders(search=text)]
+
+    assert found("crm") == ["Бот"]
+    assert found("ромаш") == ["Лендинг"]
+
+
+def test_upcoming_starts_with_overdue(manager, ivan):
+    add(manager, ivan, "Поздно", deadline=date(2026, 11, 1))
+    add(manager, ivan, "Просрочен", deadline=date(2026, 10, 1))
+    add(manager, ivan, "Без срока")
+    add(manager, ivan, "Сдан", deadline=date(2026, 10, 2),
+        status=OrderStatus.DELIVERED)
+    assert [o.title for o in manager.upcoming(TODAY)] == ["Просрочен",
+                                                          "Поздно"]
