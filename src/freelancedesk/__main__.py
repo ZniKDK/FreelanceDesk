@@ -8,6 +8,7 @@ from PyQt6.QtCore import QLibraryInfo, QSettings, QTranslator
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from freelancedesk.app.main_window import MainWindow
+from freelancedesk.app.theme import apply_theme
 from freelancedesk.config import (
     app_dir, build_dsn, load_config, sqlite_path, storage_backend,
 )
@@ -59,6 +60,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("FreelanceDesk")
     translator = install_russian(app)  # noqa: F841 — держим ссылку
+    apply_theme(app)
 
     data_dir = app_dir()
     error = None
