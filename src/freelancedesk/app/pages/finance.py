@@ -141,12 +141,12 @@ class FinancePage(Page):
             return
 
         summary = manager.summary(start, end)
-        self.income_card.set(
-            format_money(summary.income, False),
+        self.income_card.set_money(
+            summary.income,
             f"{summary.payments} {plural(summary.payments, PAYMENTS)}")
-        self.tax_card.set(format_money(summary.tax),
-                          "4 % с физлиц, 6 % с юрлиц и ИП")
-        self.net_card.set(format_money(summary.net, False), "после налога")
+        self.tax_card.set_money(summary.tax, "4 % с физлиц, 6 % с юрлиц и ИП",
+                                kopecks=True)
+        self.net_card.set_money(summary.net, "после налога")
 
         self.chart.set_data([
             (MONTH_SHORT[month.month - 1], amount)

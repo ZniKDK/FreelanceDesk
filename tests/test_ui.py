@@ -427,3 +427,112 @@ def test_state_is_saved_and_restored(manager, tmp_path):
     assert second.goal() == 60_000
     assert second.stack.currentIndex() == CLIENTS
     assert second.orders.current_filter_key() == OrderView.DONE
+
+
+# --- Тема ---
+
+def test_dark_theme_rebuilds_and_keeps_place(window, manager):
+    from freelancedesk.app.theme import C, DARK, LIGHT
+    order_id = find(manager, "Telegram-бот").id
+    window.open_order(order_id)
+    window.orders.set_filter(OrderView.ALL)
+    window.orders.select_order(order_id)
+
+    window.set_theme("dark")
+    try:
+        assert C["bg"] == DARK["bg"]
+        # Экраны построены заново, но пользователь там же, где был
+        assert window.stack.currentIndex() == ORDERS
+        assert window.orders.current_filter_key() == OrderView.ALL
+        assert window.orders.selected_order_id() == order_id
+        # Палитра Qt тоже тёмная — для выпадающих списков и форм
+        base = QApplication.instance().palette().base().color().name()
+        assert base == DARK["surface"]
+    finally:
+        window.set_theme("light")
+    assert C["bg"] == LIGHT["bg"]
+
+
+def test_toggle_theme_and_saved_choice(manager, tmp_path):
+    from freelancedesk.app.theme import is_dark
+    settings = QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat)
+    first = MainWindow(manager, today=lambda: TODAY, settings=settings)
+    first.toggle_theme()
+    try:
+        assert is_dark()
+        assert settings.value("theme") == "dark"
+    finally:
+        first.set_theme("light")
+
+
+# --- «Липкий» заказ и уведомления ---
+
+def test_sticky_order_stays_after_leaving_filter(window, manager,
+                                                 no_dialogs):
+    order_id = find(manager, "Правки").id
+    window.open_order(order_id)  # фильтр «Активные»
+    window.orders.set_status(OrderStatus.CANCELLED)
+
+    # Заказ ушёл из «Активных», но остался в списке и в карточке
+    assert "Правки" in order_titles(window)
+    assert window.orders.selected_order_id() == order_id
+    lst = window.orders.list
+    row = next(lst.itemWidget(lst.item(i)) for i in range(lst.count())
+               if lst.itemWidget(lst.item(i)).title.text() == "Правки")
+    assert "перешёл в «Отменённые»" in row.subtitle.text()
+    # Уведомление предлагает перейти к заказу
+    # isVisibleTo — видимость внутри окна (само окно в тестах не показано)
+    assert window.toast.isVisibleTo(window)
+    assert window.toast.action.text() == "Показать"
+
+    window.toast.action.click()
+    assert window.orders.current_filter_key() == CANCELLED_KEY
+    assert window.orders.selected_order_id() == order_id
+
+
+def test_sticky_order_released_by_filter_change(window, manager,
+                                                no_dialogs):
+    window.open_order(find(manager, "Правки").id)
+    window.orders.set_status(OrderStatus.CANCELLED)
+    window.orders.set_filter(OrderView.ACTIVE)
+    assert "Правки" not in order_titles(window)
+
+
+def test_status_change_inside_filter_just_notifies(window, manager,
+                                                   no_dialogs):
+    window.open_order(find(manager, "Правки").id)
+    window.orders.set_status(OrderStatus.DELIVERED)  # «Ждёт оплаты» ⊂ активных
+    assert window.toast.text.text() == "Статус: Сдан"
+    assert not window.toast.action.isVisibleTo(window)
+
+
+def test_no_stray_windows_after_refresh(window, manager, no_dialogs):
+    """Регрессия: строки платежей не должны становиться отдельными окнами."""
+    window.show()
+    window.open_order(find(manager, "Telegram-бот").id)
+    window.orders.set_status(OrderStatus.DELIVERED)
+    stray = [w for w in QApplication.topLevelWidgets()
+             if w.isVisible() and w is not window
+             and w.__class__.__name__ in ("QFrame", "QLabel", "QWidget")]
+    window.close()
+    assert stray == []
+
+
+# --- Мелочи интерфейса ---
+
+def test_filter_chips_fit_text(window):
+    for chip_btn in window.orders.chips.values():
+        needed = chip_btn.fontMetrics().horizontalAdvance(chip_btn.text())
+        assert chip_btn.minimumWidth() > needed
+
+
+def test_animations_run_without_errors(window, manager):
+    from freelancedesk.app import animations
+    animations.set_enabled(True)
+    window.show()
+    window.show_page(FINANCE)                # появление экрана, рост диаграммы
+    window.open_order(find(manager, "Парсер").id)   # карточка, полоска
+    window.set_goal(50_000)                  # досчитывающие суммы
+    window.notify("Проверка")                # уведомление
+    QApplication.processEvents()
+    window.close()

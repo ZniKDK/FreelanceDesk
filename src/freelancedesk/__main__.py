@@ -60,7 +60,6 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("FreelanceDesk")
     translator = install_russian(app)  # noqa: F841 — держим ссылку
-    apply_theme(app)
 
     data_dir = app_dir()
     error = None
@@ -75,9 +74,11 @@ def main() -> int:
         storage_label = "в памяти — данные НЕ сохраняются"
         error = str(exc)
 
-    # Размер окна, фильтры и цель — в отдельном ini-файле (не в реестре)
+    # Размер окна, фильтры, цель и тема — в отдельном ini-файле (не в реестре)
     settings = QSettings(str(data_dir / "ui_state.ini"),
                          QSettings.Format.IniFormat)
+    # Тему включаем до создания окна, чтобы оно сразу было в нужных цветах
+    apply_theme(app, settings.value("theme", "light"))
     # Цепочка зависимостей: хранилище → менеджер → окно
     window = MainWindow(OrderManager(storage), settings=settings,
                         data_dir=data_dir, storage_label=storage_label)

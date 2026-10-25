@@ -1,15 +1,24 @@
-"""Экран «Заказы»: фильтры, список заказов и карточка выбранного заказа."""
+"""Экран «Заказы»: фильтры, список заказов и карточка выбранного заказа.
+
+«Липкий» заказ: если поменять статус и заказ перестанет подходить под
+фильтр, он не исчезает сразу — строка остаётся (полупрозрачной, с
+пометкой, куда перешёл заказ), карточка открыта. Строка уходит, когда
+пользователь сменит фильтр или поиск, либо выберет другой заказ и
+данные обновятся.
+"""
 
 from datetime import date
 
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QButtonGroup, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
-    QLineEdit, QListWidget, QListWidgetItem, QMenu, QProgressBar,
-    QScrollArea, QSplitter, QStackedLayout, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QDialog, QFrame, QGraphicsOpacityEffect,
+    QGridLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem,
+    QMenu, QProgressBar, QScrollArea, QSplitter, QStackedLayout,
+    QVBoxLayout, QWidget,
 )
 
+from freelancedesk.app import animations
 from freelancedesk.app.dialogs import OrderDialog, PaymentDialog
 from freelancedesk.app.labels import (
     STATUS_LABELS, VIEW_LABELS, deadline_text, format_date, format_money,
@@ -17,10 +26,11 @@ from freelancedesk.app.labels import (
 )
 from freelancedesk.app.pages import Page
 from freelancedesk.app.theme import (
-    C, PAYMENT_BAR_COLORS, STATUS_CHIPS, icon,
+    C, icon, payment_bar_color, status_chip, tone_color,
 )
 from freelancedesk.app.widgets import (
-    button, chip, clear_layout, label, thin_progress,
+    bar_style, button, chip, clear_layout, label, set_fitting_text,
+    thin_progress,
 )
 from freelancedesk.core.manager import (
     TAX_RATES, OrderMoney, OrderView, PaymentState,
@@ -29,15 +39,15 @@ from freelancedesk.core.models import (
     OPEN_STATUSES, ClientType, Order, OrderStatus, Payment,
 )
 
-# Цвет текста срока по «тону» из deadline_text
-TONE_COLORS = {"danger": C["danger_text"], "warning": C["warning_text"],
-               "": C["text2"]}
-
 # Варианты сортировки списка
 SORTS = {"deadline": "По сроку", "amount": "По цене", "new": "Сначала новые"}
 
 # Ключ фильтра «Отменённые» (это статус, а не выборка OrderView)
 CANCELLED_KEY = "cancelled"
+
+# Куда «переезжает» заказ: самая подходящая выборка для подсказки
+DESTINATION_ORDER = [OrderView.DONE, OrderView.AWAITING_PAYMENT,
+                     OrderView.ACTIVE]
 
 
 def money_caption(order: Order, money: OrderMoney) -> tuple[str, str]:
@@ -52,10 +62,14 @@ def money_caption(order: Order, money: OrderMoney) -> tuple[str, str]:
 
 
 class OrderRow(QWidget):
-    """Строка списка заказов: название, клиент и срок, статус, оплата."""
+    """Строка списка заказов: название, клиент и срок, статус, оплата.
+
+    moved_to — подпись выборки, куда ушёл «липкий» заказ (строка тогда
+    полупрозрачная и с пометкой).
+    """
 
     def __init__(self, order: Order, client_name: str, money: OrderMoney,
-                 today: date) -> None:
+                 today: date, moved_to: str = "") -> None:
         super().__init__()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 9, 12, 9)
@@ -68,15 +82,17 @@ class OrderRow(QWidget):
                                  OrderStatus.CANCELLED else
                                  f"color: {C['text2']};")
         when, tone = deadline_text(order, today)
+        extra = (f" · <span style='color:{C['accent_text']}'>перешёл в "
+                 f"«{moved_to}»</span>" if moved_to else "")
         # Подпись с HTML: срок подкрашивается (красный — просрочен)
         self.subtitle = label(
-            f"{client_name} · <span style='color:{TONE_COLORS[tone]}'>"
-            f"{when}</span>", "caption")
+            f"{client_name} · <span style='color:{tone_color(tone)}'>"
+            f"{when}</span>{extra}", "caption")
         text.addWidget(self.title)
         text.addWidget(self.subtitle)
         layout.addLayout(text, 1)
 
-        caption, bg, fg = STATUS_CHIPS[order.status]
+        caption, bg, fg = status_chip(order.status)
         status = chip(caption, bg, fg)
         status.setFixedSize(80, 22)
         layout.addWidget(status, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -89,11 +105,17 @@ class OrderRow(QWidget):
         self.money_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         pay.addWidget(self.money_label)
         pay.addWidget(thin_progress(money.progress,
-                                    PAYMENT_BAR_COLORS[money.state]))
+                                    payment_bar_color(money.state)))
         pay_box = QWidget()
         pay_box.setLayout(pay)
         pay_box.setFixedWidth(110)
         layout.addWidget(pay_box)
+
+        if moved_to:
+            # Полупрозрачная строка: «я здесь временно»
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.55)
+            self.setGraphicsEffect(effect)
 
 
 class OrderPanel(QWidget):
@@ -111,9 +133,9 @@ class OrderPanel(QWidget):
                       "и платежи", "muted")
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stack.addWidget(empty)
-        content = QWidget()
-        self.stack.addWidget(content)
-        body = QVBoxLayout(content)
+        self.content = QWidget()
+        self.stack.addWidget(self.content)
+        body = QVBoxLayout(self.content)
         body.setContentsMargins(18, 16, 18, 16)
         body.setSpacing(12)
 
@@ -155,6 +177,8 @@ class OrderPanel(QWidget):
         self.money_bar.setTextVisible(False)
         self.tax_label = label()
         self.net_label = label()
+        self.net_label.setStyleSheet(f"color: {C['success_text']};"
+                                     " font-weight: 600;")
         self.remaining_label = label()
         grid.addWidget(label("Получено", "muted"), 0, 0)
         grid.addWidget(self.received_label, 0, 1, Qt.AlignmentFlag.AlignRight)
@@ -210,6 +234,7 @@ class OrderPanel(QWidget):
     def show_order(self, order_id: int | None) -> None:
         """Показать заказ (или заглушку, если ничего не выбрано)."""
         manager = self.app.manager
+        previous_id = self.order.id if self.order else None
         self.order = manager.get_order(order_id) if order_id else None
         if self.order is None:
             self.stack.setCurrentIndex(0)
@@ -240,14 +265,13 @@ class OrderPanel(QWidget):
         self.received_label.setText(
             f"{format_money(money.received, False)} из "
             f"{format_money(money.price, False)}")
-        self.money_bar.setValue(round(money.progress * 100))
-        self.money_bar.setStyleSheet(
-            "QProgressBar::chunk { background: "
-            f"{PAYMENT_BAR_COLORS[money.state]}; }}")
+        self.money_bar.setStyleSheet(bar_style(payment_bar_color(money.state)))
+        new_order = previous_id != order.id
+        if new_order:
+            self.money_bar.setValue(0)  # для нового заказа — рост с нуля
+        animations.animate_value(self.money_bar, round(money.progress * 100))
         self.tax_label.setText(format_money(money.tax))
         self.net_label.setText(format_money(money.net))
-        self.net_label.setStyleSheet(f"color: {C['success_text']};"
-                                     " font-weight: 600;")
         self.remaining_label.setText(format_money(money.remaining))
 
         self._fill_payments(manager.payments_for(order.id))
@@ -256,10 +280,13 @@ class OrderPanel(QWidget):
         deadline = format_date(order.deadline) or "не задан"
         self.deadline_label.setText(
             f"Дедлайн: {deadline} · <span style='color:"
-            f"{TONE_COLORS[tone]}'>{when}</span>")
+            f"{tone_color(tone)}'>{when}</span>")
         self.link_btn.setVisible(bool(order.link))
         self.link_btn.setToolTip(order.link)
         self.description.setText(order.description or "Описания нет")
+
+        if new_order:
+            animations.fade_in(self.content, shift=0)
 
     def _fill_payments(self, payments: list[Payment]) -> None:
         """Перестроить список платежей."""
@@ -310,6 +337,8 @@ class OrdersPage(Page):
 
     def __init__(self, app) -> None:
         super().__init__(app, "Заказы")
+        # «Липкий» заказ: остаётся в списке, даже если ушёл из фильтра
+        self.pinned_id: int | None = None
 
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Поиск: название, описание, клиент")
@@ -317,7 +346,7 @@ class OrdersPage(Page):
         self.search_edit.addAction(icon("search"),
                                    QLineEdit.ActionPosition.LeadingPosition)
         self.search_edit.setMinimumWidth(280)
-        self.search_edit.textChanged.connect(self.refresh)
+        self.search_edit.textChanged.connect(self._filters_changed)
         self.sort_combo = QComboBox()
         for key, text in SORTS.items():
             self.sort_combo.addItem(text, key)
@@ -336,7 +365,7 @@ class OrdersPage(Page):
         for key in list(VIEW_LABELS) + [CANCELLED_KEY]:
             chip_btn = button("", kind="chip")
             chip_btn.setCheckable(True)
-            chip_btn.clicked.connect(self.refresh)
+            chip_btn.clicked.connect(self._filters_changed)
             self.chip_group.addButton(chip_btn)
             self.chips[key] = chip_btn
             chips_row.addWidget(chip_btn)
@@ -382,6 +411,11 @@ class OrdersPage(Page):
 
     def set_filter(self, key) -> None:
         self.chips[key].setChecked(True)
+        self._filters_changed()
+
+    def _filters_changed(self) -> None:
+        """Сменили фильтр или поиск — «липкий» заказ больше не держим."""
+        self.pinned_id = None
         self.refresh()
 
     def _orders(self) -> list[Order]:
@@ -407,6 +441,24 @@ class OrdersPage(Page):
             o.status not in OPEN_STATUSES or o.deadline is None,
             o.deadline or date.max, -o.id))
 
+    def destination_label(self, order: Order) -> str:
+        """Подпись фильтра, в котором теперь находится заказ."""
+        if order.status == OrderStatus.CANCELLED:
+            return "Отменённые"
+        views = self.app.manager.order_views(order.id, self.app.today())
+        for view in DESTINATION_ORDER:
+            if view in views:
+                return VIEW_LABELS[view]
+        return VIEW_LABELS[OrderView.ALL]
+
+    def destination_key(self, order: Order):
+        """Ключ фильтра, в котором теперь находится заказ."""
+        if order.status == OrderStatus.CANCELLED:
+            return CANCELLED_KEY
+        views = self.app.manager.order_views(order.id, self.app.today())
+        return next((v for v in DESTINATION_ORDER if v in views),
+                    OrderView.ALL)
+
     def refresh(self) -> None:
         today = self.app.today()
         manager = self.app.manager
@@ -414,23 +466,33 @@ class OrdersPage(Page):
         cancelled = len(manager.list_orders(status=OrderStatus.CANCELLED,
                                             today=today))
         for key, chip_btn in self.chips.items():
-            if key == CANCELLED_KEY:
-                chip_btn.setText(f"Отменённые {cancelled}")
-            else:
-                chip_btn.setText(f"{VIEW_LABELS[key]} {counts[key]}")
+            text = (f"Отменённые {cancelled}" if key == CANCELLED_KEY
+                    else f"{VIEW_LABELS[key]} {counts[key]}")
+            set_fitting_text(chip_btn, text)
 
         keep_id = self.selected_order_id()
         names = {c.id: c.name for c in manager.list_clients()}
         money = manager.money_all()
+        orders = self._orders()
+        visible = {o.id for o in orders}
+        # «Липкий» заказ ушёл из фильтра — оставляем его в списке
+        pinned = manager.get_order(self.pinned_id) if self.pinned_id else None
+        if pinned is not None and pinned.id not in visible:
+            orders.append(pinned)
+        else:
+            pinned = None
+
         # blockSignals — не дёргать карточку на каждой строке при заполнении
         self.list.blockSignals(True)
         self.list.clear()
-        orders = self._sorted(self._orders())
-        for order in orders:
+        for order in self._sorted(orders):
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, order.id)
+            moved_to = (self.destination_label(order)
+                        if pinned is not None and order.id == pinned.id
+                        else "")
             row = OrderRow(order, names.get(order.client_id, "?"),
-                           money[order.id], today)
+                           money[order.id], today, moved_to)
             item.setSizeHint(row.sizeHint())
             self.list.addItem(item)
             self.list.setItemWidget(item, row)
@@ -453,7 +515,9 @@ class OrdersPage(Page):
         for row in range(self.list.count()):
             item = self.list.item(row)
             if item.data(Qt.ItemDataRole.UserRole) == order_id:
+                self.list.blockSignals(True)
                 self.list.setCurrentItem(item)
+                self.list.blockSignals(False)
                 self.panel.show_order(order_id)
                 return True
         return False
@@ -469,6 +533,9 @@ class OrdersPage(Page):
 
     def _selection_changed(self, current, _previous) -> None:
         order_id = current.data(Qt.ItemDataRole.UserRole) if current else None
+        if order_id != self.pinned_id:
+            # Выбрали другой заказ — «липкий» уйдёт при следующем обновлении
+            self.pinned_id = None
         self.panel.show_order(order_id)
 
     def _show_menu(self, position) -> None:
@@ -507,6 +574,30 @@ class OrdersPage(Page):
             self.app.show_error("Выберите заказ в списке.")
         return order_id
 
+    def _change_selected(self, order_id: int, action, message: str) -> None:
+        """Изменить выбранный заказ, не теряя его из списка.
+
+        Заказ становится «липким». Если он ушёл из текущего фильтра,
+        уведомление предлагает перейти туда, где он теперь.
+        """
+        self.pinned_id = order_id
+        if not self.app.run(action):
+            return
+        order = self.app.manager.get_order(order_id)
+        visible = {o.id for o in self._orders()}
+        if order is not None and order_id not in visible:
+            target = self.destination_key(order)
+            self.app.notify(
+                f"{message}. Заказ перешёл в «{self.destination_label(order)}»",
+                "Показать", lambda: self._go_to(target, order_id))
+        else:
+            self.app.notify(message)
+
+    def _go_to(self, key, order_id: int) -> None:
+        """Переключить фильтр и выделить заказ."""
+        self.set_filter(key)
+        self.select_order(order_id)
+
     def add_order(self) -> None:
         clients = self.app.manager.list_clients()
         if not clients:
@@ -520,6 +611,7 @@ class OrdersPage(Page):
             if self.app.run(lambda: created.append(self.app.manager.add_order(
                     dialog.order(), today=self.app.today()))):
                 self.show_order(created[0].id)
+                self.app.notify("Заказ создан")
 
     def edit_order(self) -> None:
         order_id = self._need_order()
@@ -530,8 +622,10 @@ class OrdersPage(Page):
                              manager.get_order(order_id), parent=self,
                              today=self.app.today())
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.app.run(lambda: manager.update_order(dialog.order(),
-                                                      today=self.app.today()))
+            self._change_selected(
+                order_id, lambda: manager.update_order(
+                    dialog.order(), today=self.app.today()),
+                "Заказ сохранён")
 
     def delete_order(self) -> None:
         order_id = self._need_order()
@@ -541,13 +635,16 @@ class OrdersPage(Page):
         extra = (f"\nВместе с ним удалятся платежи: {len(payments)}."
                  if payments else "")
         if self.app.confirm(f"Удалить заказ?{extra}"):
-            self.app.run(lambda: self.app.manager.delete_order(order_id))
+            if self.app.run(lambda: self.app.manager.delete_order(order_id)):
+                self.app.notify("Заказ удалён")
 
     def set_status(self, status: OrderStatus) -> None:
         order_id = self._need_order()
         if order_id is not None:
-            self.app.run(lambda: self.app.manager.change_status(
-                order_id, status, today=self.app.today()))
+            self._change_selected(
+                order_id, lambda: self.app.manager.change_status(
+                    order_id, status, today=self.app.today()),
+                f"Статус: {STATUS_LABELS[status]}")
 
     def toggle_cancel(self) -> None:
         """Отменить заказ или вернуть отменённый в работу."""
@@ -582,26 +679,34 @@ class OrdersPage(Page):
         dialog = PaymentDialog(order_id, remaining, parent=self,
                                today=self.app.today())
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.app.run(lambda: self.app.manager.add_payment(
-                dialog.payment()))
+            payment = dialog.payment()
+            self._change_selected(
+                order_id, lambda: self.app.manager.add_payment(payment),
+                f"Платёж {format_money(payment.amount, False)} добавлен")
 
     def edit_payment(self, payment_id: int) -> None:
         payment = self.app.manager.get_payment(payment_id)
         dialog = PaymentDialog(payment.order_id, payment=payment,
                                parent=self, today=self.app.today())
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.app.run(lambda: self.app.manager.update_payment(
-                dialog.payment()))
+            self._change_selected(
+                payment.order_id, lambda: self.app.manager.update_payment(
+                    dialog.payment()), "Платёж сохранён")
 
     def delete_payment(self, payment_id: int) -> None:
         payment = self.app.manager.get_payment(payment_id)
         if self.app.confirm(
                 f"Удалить платёж {format_money(payment.amount)} "
                 f"от {format_date(payment.paid_on)}?"):
-            self.app.run(lambda: self.app.manager.delete_payment(payment_id))
+            self._change_selected(
+                payment.order_id,
+                lambda: self.app.manager.delete_payment(payment_id),
+                "Платёж удалён")
 
     def toggle_receipt(self, payment_id: int) -> None:
         payment = self.app.manager.get_payment(payment_id)
-        self.app.run(lambda: self.app.manager.set_receipt(
-            payment_id, not payment.receipt_issued))
-
+        issued = not payment.receipt_issued
+        self._change_selected(
+            payment.order_id,
+            lambda: self.app.manager.set_receipt(payment_id, issued),
+            "Чек отмечен" if issued else "Отметка о чеке снята")
