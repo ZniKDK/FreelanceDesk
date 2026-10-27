@@ -14,8 +14,9 @@ from freelancedesk.app.labels import (
 )
 from freelancedesk.app.pages import Page
 from freelancedesk.app.theme import C, icon
-from freelancedesk.app.widgets import Card, StatCard, button, label, \
-    thin_progress
+from freelancedesk.app.widgets import (
+    Card, SmoothScroller, StatCard, button, label, thin_progress,
+)
 from freelancedesk.core.manager import OrderView, month_start
 
 
@@ -62,6 +63,9 @@ class DashboardPage(Page):
         """Список заказов без рамки; щелчок открывает заказ."""
         widget = QListWidget()
         widget.setStyleSheet("QListWidget { border: none; }")
+        widget.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel)
+        SmoothScroller(widget)
         widget.itemClicked.connect(self._open_item)
         return widget
 

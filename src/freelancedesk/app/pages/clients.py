@@ -34,7 +34,9 @@ class ClientsPage(Page):
         self.header.addWidget(self.search_edit)
         self.header.addWidget(new_btn)
 
-        self.table = make_table(HEADERS)
+        self.table = make_table(
+            HEADERS, empty=("Клиентов пока нет",
+                            "Добавьте первого кнопкой «Новый клиент»"))
         # activated — двойной щелчок или Enter по строке
         self.table.activated.connect(self.edit_client)
         self.layout_.addWidget(self.table, 1)
