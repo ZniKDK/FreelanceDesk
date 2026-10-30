@@ -156,6 +156,8 @@ class SortItem(QTableWidgetItem):
         super().__init__(text)
         # Без ключа сортируем по тексту без учёта регистра
         self.sort_key = text.casefold() if sort_key is None else sort_key
+        # Все данные — ровно посередине своего столбца
+        self.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
     def __lt__(self, other: QTableWidgetItem) -> bool:
         # __lt__ — оператор «меньше»; Qt вызывает его при сортировке
@@ -165,11 +167,8 @@ class SortItem(QTableWidgetItem):
 
 
 def money_item(amount: Decimal) -> SortItem:
-    """Ячейка с суммой: выравнивание вправо, сортировка по числу."""
-    item = SortItem(format_money(amount), amount)
-    item.setTextAlignment(Qt.AlignmentFlag.AlignRight
-                          | Qt.AlignmentFlag.AlignVCenter)
-    return item
+    """Ячейка с суммой: сортировка по числу, а не по тексту."""
+    return SortItem(format_money(amount), amount)
 
 
 def make_table(headers: list[str], sort_column: int = 0,
@@ -196,10 +195,12 @@ def make_table(headers: list[str], sort_column: int = 0,
     table.verticalHeader().setDefaultSectionSize(34)  # высота строки
     table.setAlternatingRowColors(True)
     table.setShowGrid(False)
+    table.setWordWrap(False)
+    table.setTextElideMode(Qt.TextElideMode.ElideRight)  # «длинный те…»
     header = table.horizontalHeader()
-    header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-    header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft)
+    # Ширины задаёт ColumnLayout; без него столбцы делят место поровну
+    header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+    header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
     order = (Qt.SortOrder.DescendingOrder if descending
              else Qt.SortOrder.AscendingOrder)
     header.setSortIndicator(sort_column, order)

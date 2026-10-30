@@ -20,7 +20,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from freelancedesk.core.models import (
-    Client, ClientType, Order, OrderStatus, Payment,
+    Client, ClientType, ContactMethod, Order, OrderStatus, Payment,
 )
 from freelancedesk.core.storage import Storage
 
@@ -39,7 +39,8 @@ class SqlStorage(Storage):
     """Общая часть SQL-хранилищ: запросы и преобразование строк в модели."""
 
     # Порядок колонок в SELECT — используется в _to_client и _to_order
-    _CLIENT_COLUMNS = "id, name, client_type, contact, platform, note"
+    _CLIENT_COLUMNS = ("id, name, client_type, email, phone, messenger,"
+                       " messenger_app, preferred_contact, platform, note")
     _ORDER_COLUMNS = ("id, title, client_id, amount, deadline, status,"
                       " delivered_on, description, link")
     _PAYMENT_COLUMNS = "id, order_id, amount, paid_on, receipt_issued"
@@ -61,7 +62,13 @@ class SqlStorage(Storage):
             id=row["id"],
             name=row["name"],
             client_type=ClientType(row["client_type"]),
-            contact=row["contact"],
+            email=row["email"],
+            phone=row["phone"],
+            messenger=row["messenger"],
+            messenger_app=row["messenger_app"],
+            # Пустая строка в базе — «способ не выбран»
+            preferred_contact=(ContactMethod(row["preferred_contact"])
+                               if row["preferred_contact"] else None),
             platform=row["platform"],
             note=row["note"],
         )
@@ -94,8 +101,11 @@ class SqlStorage(Storage):
 
     @staticmethod
     def _client_values(client: Client) -> tuple:
-        return (client.name, client.client_type.value, client.contact,
-                client.platform, client.note)
+        preferred = (client.preferred_contact.value
+                     if client.preferred_contact else "")
+        return (client.name, client.client_type.value, client.email,
+                client.phone, client.messenger, client.messenger_app,
+                preferred, client.platform, client.note)
 
     @staticmethod
     def _order_values(order: Order) -> tuple:
@@ -113,16 +123,19 @@ class SqlStorage(Storage):
     def add_client(self, client: Client) -> Client:
         # RETURNING id — база сразу возвращает id новой строки
         row = self._execute(
-            "INSERT INTO clients (name, client_type, contact, platform, note)"
-            " VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            "INSERT INTO clients (name, client_type, email, phone,"
+            " messenger, messenger_app, preferred_contact, platform, note)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             self._client_values(client),
         ).fetchone()
         return replace(client, id=row["id"])
 
     def update_client(self, client: Client) -> None:
         cur = self._execute(
-            "UPDATE clients SET name = %s, client_type = %s, contact = %s,"
-            " platform = %s, note = %s WHERE id = %s",
+            "UPDATE clients SET name = %s, client_type = %s, email = %s,"
+            " phone = %s, messenger = %s, messenger_app = %s,"
+            " preferred_contact = %s, platform = %s, note = %s"
+            " WHERE id = %s",
             self._client_values(client) + (client.id,),
         )
         # rowcount — сколько строк изменилось; 0 значит, клиента нет

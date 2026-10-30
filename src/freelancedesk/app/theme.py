@@ -281,8 +281,15 @@ QTableWidget {{ gridline-color: transparent;
     selection-color: {C['text']};
     alternate-background-color: {C['alt_row']}; }}
 QHeaderView::section {{ background: {C['surface']}; border: none;
-    border-bottom: 1px solid {C['border']}; padding: 6px 8px;
+    border-bottom: 1px solid {C['border']};
+    border-right: 1px solid {C['border']}; padding: 6px 8px;
     color: {C['text2']}; font-weight: 600; }}
+QHeaderView[editing="true"]::section {{ background: {C['accent_bg']};
+    color: {C['accent_text']}; border-right: 1px dashed {C['accent']}; }}
+QTableView::item {{ border-right: 1px solid {C['border']};
+    padding: 0 6px; }}
+QFrame#editBar {{ background: {C['accent_bg']}; border-radius: 8px; }}
+QFrame#editBar QLabel {{ color: {C['accent_text']}; }}
 QTableCornerButton::section {{ background: {C['surface']}; border: none; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}

@@ -27,7 +27,7 @@ from freelancedesk.app.theme import apply_theme, icon
 from freelancedesk.app.widgets import BarChart, SortItem
 from freelancedesk.core.manager import OrderManager, OrderView
 from freelancedesk.core.models import (
-    Client, ClientType, Order, OrderStatus, Payment,
+    Client, ClientType, ContactMethod, Order, OrderStatus, Payment,
 )
 from freelancedesk.core.storage import InMemoryStorage
 
@@ -151,9 +151,21 @@ def test_icons_load():
 
 def test_client_dialog_roundtrip():
     original = Client(id=7, name="ООО Ромашка",
-                      client_type=ClientType.COMPANY, contact="@romashka",
+                      client_type=ClientType.COMPANY, email="hi@romashka.ru",
+                      phone="+7 900 000-00-00", messenger="@romashka",
+                      messenger_app="Telegram",
+                      preferred_contact=ContactMethod.PHONE,
                       platform="Своя площадка", note="постоянный")
     assert ClientDialog(original).client() == original
+
+
+def test_client_dialog_without_messenger():
+    dialog = ClientDialog()
+    dialog.name_edit.setText("Иван")
+    client = dialog.client()
+    # Мессенджер не указан — и название приложения не сохраняется
+    assert (client.messenger, client.messenger_app) == ("", "")
+    assert client.preferred_contact is None
 
 
 def test_order_dialog_roundtrip():
@@ -367,8 +379,8 @@ def test_clients_table(window):
     table = window.clients.table
     names = [table.item(r, 0).text() for r in range(table.rowCount())]
     assert names == ["Иван", "ООО Ромашка"]
-    assert table.item(1, 4).text() == "2"                 # заказов
-    assert table.item(1, 5).text() == "10 000,00 ₽"       # получено
+    assert table.item(1, 6).text() == "2"                 # заказов
+    assert table.item(1, 7).text() == "10 000,00 ₽"       # получено
 
     window.clients.search_edit.setText("fl.ru")
     assert window.clients.table.rowCount() == 1
@@ -634,3 +646,118 @@ def test_animated_combo_popup(window):
     QApplication.processEvents()
     combo.hidePopup()
     window.close()
+
+
+# --- Таблицы: столбцы, выравнивание, режим настройки ---
+
+def _shown_clients(window, width=1200):
+    window.resize(width, 760)
+    window.show()
+    window.show_page(CLIENTS)
+    QApplication.processEvents()
+    return window.clients.table
+
+
+def _ratios(table) -> list[float]:
+    header = table.horizontalHeader()
+    total = sum(header.sectionSize(c) for c in range(table.columnCount()))
+    return [round(header.sectionSize(c) / total, 2)
+            for c in range(table.columnCount())]
+
+
+def test_columns_keep_proportions_on_resize(window):
+    """Регрессия: после «развернуть — свернуть» столбец «Имя» не раздувается."""
+    table = _shown_clients(window, 1100)
+    before = _ratios(table)
+    window.resize(1800, 900)   # как «на весь экран»
+    QApplication.processEvents()
+    window.resize(1100, 760)   # и обратно
+    QApplication.processEvents()
+    # Доли те же (±1 % на округление пикселей)
+    assert all(abs(a - b) <= 0.01 for a, b in zip(_ratios(table), before))
+    # Столбцы занимают ровно ширину таблицы — без щели справа
+    header = table.horizontalHeader()
+    used = sum(header.sectionSize(c) for c in range(table.columnCount()))
+    assert used == table.viewport().width()
+    window.close()
+
+
+def test_cells_are_centered(window):
+    table = window.clients.table
+    centered = Qt.AlignmentFlag.AlignCenter
+    for col in range(table.columnCount()):
+        assert table.item(0, col).textAlignment() == centered
+    header_align = table.horizontalHeader().defaultAlignment()
+    assert header_align & Qt.AlignmentFlag.AlignHCenter
+
+
+def test_preferred_contact_is_bold(window, manager):
+    lisa = manager.add_client(Client(name="Алиса", email="a@mail.ru",
+                                     phone="+7 900 000-00-00",
+                                     preferred_contact=ContactMethod.PHONE))
+    window.refresh()
+    table = window.clients.table
+    row = [table.item(r, 0).text() for r in range(table.rowCount())].index(
+        lisa.name)
+    assert table.item(row, 4).font().bold()        # телефон — жирным
+    assert not table.item(row, 3).font().bold()    # почта — обычным
+
+
+def test_column_editing_saved_and_reset(manager, tmp_path):
+    settings = QSettings(str(tmp_path / "ui.ini"), QSettings.Format.IniFormat)
+    first = MainWindow(manager, today=lambda: TODAY, settings=settings)
+    table = _shown_clients(first)
+    columns = first.clients.columns
+
+    first.set_table_editing(True)
+    assert first.edit_bar.isVisibleTo(first)
+    header = table.horizontalHeader()
+    header.resizeSection(0, 400)             # шире «Имя»
+    header.moveSection(header.visualIndex(4), 1)   # «Телефон» вторым
+    columns.set_hidden(8, True)              # спрятать «Заметку»
+    first.set_table_editing(False)           # «Готово» — сохраняем
+    name_share = columns.weights[0]
+    first.close()
+
+    second = MainWindow(manager, today=lambda: TODAY, settings=settings)
+    table2 = _shown_clients(second)
+    restored = second.clients.columns
+    assert round(restored.weights[0], 2) == round(name_share, 2)
+    assert table2.horizontalHeader().logicalIndex(1) == 4
+    assert table2.horizontalHeader().isSectionHidden(8)
+
+    second.set_table_editing(True)
+    second.reset_tables()                    # «Сбросить»
+    assert restored.weights == restored.defaults
+    assert not table2.horizontalHeader().isSectionHidden(8)
+    assert table2.horizontalHeader().logicalIndex(1) == 1
+    second.set_table_editing(False)
+    second.close()
+
+
+def test_columns_fixed_outside_editing(window):
+    from PyQt6.QtWidgets import QHeaderView
+    header = window.clients.table.horizontalHeader()
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
+    window.set_table_editing(True)
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Interactive
+    assert header.sectionsMovable()
+    window.set_table_editing(False)
+    assert not header.sectionsMovable()
+
+
+def test_last_visible_column_cannot_be_hidden(window):
+    columns = window.clients.columns
+    for col in range(columns.count):
+        columns.set_hidden(col, True)
+    assert len(columns.visible_columns()) == 1
+
+
+def test_animations_submenu(window):
+    menu = window.sidebar.settings_btn.menu()
+    anim_menu = next(a.menu() for a in menu.actions()
+                     if a.text() == "Анимации")
+    texts = [a.text() for a in anim_menu.actions()]
+    assert texts == ["Включены", "Выключены"]
+    anim_menu.actions()[1].trigger()
+    assert window.toast.text.text().startswith("Анимации выключены")

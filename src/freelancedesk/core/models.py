@@ -18,6 +18,18 @@ class ClientType(Enum):
     COMPANY = "company"  # юрлицо или ИП — 6 %
 
 
+class ContactMethod(Enum):
+    """Предпочтительный способ связи с клиентом."""
+
+    EMAIL = "email"
+    PHONE = "phone"
+    MESSENGER = "messenger"
+
+
+# Мессенджеры для выбора в форме клиента
+MESSENGER_APPS = ["Telegram", "WhatsApp", "VK", "MAX", "Другой"]
+
+
 class OrderStatus(Enum):
     """Статус работы по заказу (оплата сюда не входит)."""
 
@@ -37,7 +49,11 @@ class Client:
 
     name: str
     client_type: ClientType = ClientType.PERSON
-    contact: str = ""
+    email: str = ""
+    phone: str = ""
+    messenger: str = ""      # ник или номер: @ivan, +7 900…
+    messenger_app: str = ""  # Telegram, WhatsApp, VK, MAX, Другой
+    preferred_contact: ContactMethod | None = None  # как удобнее связаться
     platform: str = ""   # площадка: Kwork, FL.ru и т. п.
     note: str = ""
     id: int | None = None  # None, пока клиент не сохранён в хранилище

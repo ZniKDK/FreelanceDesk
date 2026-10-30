@@ -92,6 +92,9 @@ class FinancePage(Page):
         self.table = make_table(PAYMENT_HEADERS, sort_column=1,
                                 descending=True,
                                 empty=("Платежей за период нет", ""))
+        # Доли ширины, порядок и видимость столбцов — с сохранением
+        self.columns = app.register_table(self.table, "finance_payments",
+                                          [30, 12, 20, 14, 12, 12])
         self.table.activated.connect(self.open_selected_order)
         self.table.setMinimumHeight(180)
         # Таблица внутри карточки — своя рамка не нужна

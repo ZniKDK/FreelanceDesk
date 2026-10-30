@@ -210,3 +210,61 @@ def test_upcoming_starts_with_overdue(manager, ivan):
         status=OrderStatus.DELIVERED)
     assert [o.title for o in manager.upcoming(TODAY)] == ["Просрочен",
                                                           "Поздно"]
+
+
+# --- Контакты клиента ---
+
+from freelancedesk.core.manager import contact_url  # noqa: E402
+from freelancedesk.core.models import ContactMethod  # noqa: E402
+
+
+@pytest.mark.parametrize("email", ["lisa@mail.ru", "a.b-c@sub.domain.org"])
+def test_valid_email_accepted(manager, email):
+    assert manager.add_client(Client(name="Лиса", email=email)).email == email
+
+
+@pytest.mark.parametrize("email", ["lisa", "lisa@mail", "@mail.ru",
+                                   "li sa@mail.ru"])
+def test_bad_email_rejected(manager, email):
+    with pytest.raises(ValueError, match="Почта"):
+        manager.add_client(Client(name="Лиса", email=email))
+
+
+@pytest.mark.parametrize("phone", ["+7 900 000-00-00", "8 (900) 0000000",
+                                   "79000000000"])
+def test_valid_phone_accepted(manager, phone):
+    assert manager.add_client(Client(name="Лиса", phone=phone)).phone == phone
+
+
+@pytest.mark.parametrize("phone", ["12345", "+7 900 abc", "8-800"])
+def test_bad_phone_rejected(manager, phone):
+    with pytest.raises(ValueError, match="Телефон"):
+        manager.add_client(Client(name="Лиса", phone=phone))
+
+
+def test_telegram_handle_gets_at(manager):
+    client = manager.add_client(Client(name="Иван", messenger="ivan",
+                                       messenger_app="Telegram"))
+    assert client.messenger == "@ivan"
+
+
+def test_preferred_contact_must_be_filled(manager):
+    with pytest.raises(ValueError, match="способ связи"):
+        manager.add_client(Client(name="Иван",
+                                  preferred_contact=ContactMethod.EMAIL))
+
+
+def test_contact_urls():
+    client = Client(name="Лиса", email="lisa@mail.ru",
+                    phone="+7 (900) 000-00-00", messenger="@lisa",
+                    messenger_app="Telegram")
+    assert contact_url(client, ContactMethod.EMAIL) == "mailto:lisa@mail.ru"
+    assert contact_url(client, ContactMethod.PHONE) == "tel:+79000000000"
+    assert contact_url(client, ContactMethod.MESSENGER) == \
+        "https://t.me/lisa"
+    client.messenger, client.messenger_app = "+7 900 000-00-00", "WhatsApp"
+    assert contact_url(client, ContactMethod.MESSENGER) == \
+        "https://wa.me/79000000000"
+    client.messenger_app = "MAX"  # у MAX нет публичных ссылок
+    assert contact_url(client, ContactMethod.MESSENGER) is None
+    assert contact_url(Client(name="Пусто"), ContactMethod.EMAIL) is None

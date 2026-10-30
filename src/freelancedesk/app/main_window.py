@@ -28,6 +28,7 @@ from freelancedesk.app.pages.orders import OrdersPage
 from freelancedesk.app.theme import (
     C, THEME_MODES, apply_theme, icon, is_dark,
 )
+from freelancedesk.app.table_layout import ColumnLayout
 from freelancedesk.app.widgets import Toast, button, label
 
 
@@ -129,6 +130,27 @@ class Sidebar(QFrame):
         QTimer.singleShot(0, self._sync_indicator)
 
 
+class EditBar(QFrame):
+    """Плашка над экраном в режиме настройки таблиц."""
+
+    def __init__(self, window: "MainWindow") -> None:
+        super().__init__()
+        self.setObjectName("editBar")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 8, 10, 8)
+        hint = label("Настройка таблиц: тяните границы столбцов, "
+                     "перетаскивайте заголовки, правая кнопка по шапке — "
+                     "показать или скрыть столбцы")
+        hint.setWordWrap(True)
+        reset_btn = button("Сбросить", "rotate-ccw")
+        reset_btn.clicked.connect(window.reset_tables)
+        done_btn = button("Готово", "check", "primary", "#ffffff")
+        done_btn.clicked.connect(lambda: window.set_table_editing(False))
+        layout.addWidget(hint, 1)
+        layout.addWidget(reset_btn)
+        layout.addWidget(done_btn)
+
+
 class MainWindow(QMainWindow):
     """Главное окно приложения.
 
@@ -151,6 +173,8 @@ class MainWindow(QMainWindow):
         self._storage_label = storage_label
         self._goal = 0
         self.theme_mode = "light"
+        self.table_layouts: list[ColumnLayout] = []
+        self.tables_editing = False
         if settings is not None:
             self._goal = settings.value("goal", 0, type=int)
             self.theme_mode = settings.value("theme", "light")
@@ -177,6 +201,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowIcon(icon("briefcase", C["accent"], 32))
+        self.table_layouts = []  # экраны зарегистрируют свои таблицы
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self)
         self.orders = OrdersPage(self)
@@ -191,8 +216,23 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        # Справа: плашка режима настройки (обычно скрыта) и экраны
+        self.edit_bar = EditBar(self)
+        self.edit_bar.hide()
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        bar_holder = QWidget()
+        bar_layout = QVBoxLayout(bar_holder)
+        bar_layout.setContentsMargins(24, 12, 24, 0)
+        bar_layout.addWidget(self.edit_bar)
+        self.bar_holder = bar_holder
+        bar_holder.hide()
+        right_layout.addWidget(bar_holder)
+        right_layout.addWidget(self.stack, 1)
         layout.addWidget(self.sidebar)
-        layout.addWidget(self.stack, 1)
+        layout.addWidget(right, 1)
         # Старое содержимое окна Qt удалит сам
         self.setCentralWidget(central)
         self.toast.left_margin = self.sidebar.width()
@@ -228,10 +268,17 @@ class MainWindow(QMainWindow):
             action.setChecked(mode == self.theme_mode)
             action.triggered.connect(lambda _, m=mode: self.set_theme(m))
             group.addAction(action)
-        self.animations_action = menu.addAction("Анимации")
-        self.animations_action.setCheckable(True)
-        self.animations_action.setChecked(animations.ENABLED)
-        self.animations_action.toggled.connect(self.set_animations)
+        anim_menu = menu.addMenu(icon("sparkles"), "Анимации")
+        anim_group = QActionGroup(anim_menu)
+        for enabled, text in ((True, "Включены"), (False, "Выключены")):
+            action = anim_menu.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(animations.ENABLED == enabled)
+            action.triggered.connect(
+                lambda _, on=enabled: self.set_animations(on))
+            anim_group.addAction(action)
+        menu.addAction(icon("list-checks"), "Настроить таблицы",
+                       lambda: self.set_table_editing(True))
         if self._data_dir is not None:
             menu.addSeparator()
             menu.addAction(icon("folder-open"), "Открыть папку с данными",
@@ -273,8 +320,41 @@ class MainWindow(QMainWindow):
         self.notify("Анимации включены" if enabled else
                     "Анимации выключены — интерфейс без движения")
 
+    # ------------------------------------------------------------------
+    # Настройка таблиц
+    # ------------------------------------------------------------------
+
+    def register_table(self, table, key: str,
+                       weights: list[int]) -> ColumnLayout:
+        """Экран сообщает о своей таблице: доли ширины, ключ настроек."""
+        layout = ColumnLayout(table, key, weights, self._settings)
+        self.table_layouts.append(layout)
+        return layout
+
+    def set_table_editing(self, editing: bool) -> None:
+        """Включить или выключить режим настройки столбцов."""
+        self.tables_editing = editing
+        for layout in self.table_layouts:
+            layout.set_editing(editing)
+        self.bar_holder.setVisible(editing)
+        self.edit_bar.setVisible(editing)
+        if editing:
+            animations.fade_in(self.edit_bar, shift=0)
+            # На «Главной» таблиц нет — переходим к клиентам
+            if self.stack.currentIndex() == HOME:
+                self.show_page(CLIENTS)
+        else:
+            self.notify("Настройки таблиц сохранены")
+
+    def reset_tables(self) -> None:
+        for layout in self.table_layouts:
+            layout.reset()
+        self.notify("Столбцы возвращены к стандартным")
+
     def _rebuild(self) -> None:
         """Построить экраны заново, сохранив, где был пользователь."""
+        if self.tables_editing:  # сохраняем настройку до пересборки
+            self.set_table_editing(False)
         page = self.stack.currentIndex()
         orders_filter = self.orders.current_filter_key()
         order_id = self.orders.selected_order_id()
@@ -435,6 +515,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802 — имя задано Qt
         """Перед закрытием окна запомнить его состояние."""
+        if self.tables_editing:
+            self.set_table_editing(False)
         if self._settings is not None:
             self._settings.setValue("geometry", self.saveGeometry())
             self._settings.setValue("page", self.stack.currentIndex())
