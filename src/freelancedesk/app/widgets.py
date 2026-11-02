@@ -6,6 +6,7 @@
 
 from collections.abc import Callable
 from decimal import Decimal
+from html import escape
 
 from PyQt6.QtCore import (
     QElapsedTimer, QEvent, QObject, QPoint, QPropertyAnimation, QRect,
@@ -57,6 +58,15 @@ def set_fitting_text(widget: QPushButton, text: str, padding: int = 30
     width = widget.fontMetrics().horizontalAdvance(text) + padding
     # Фиксированная ширина: кнопка не сжимается и не наезжает на соседей
     widget.setFixedWidth(width)
+
+
+def wrapped_tip(text: str) -> str:
+    """Текст подсказки, который переносится по строкам.
+
+    Простой текст Qt показывает одной строкой во всю ширину экрана,
+    а «форматированный» (HTML) — переносит. Спецсимволы экранируем.
+    """
+    return f"<p style='white-space: pre-wrap'>{escape(text)}</p>"
 
 
 def chip(text: str, background: str, color: str) -> QLabel:

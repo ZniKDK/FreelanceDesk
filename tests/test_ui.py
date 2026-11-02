@@ -761,3 +761,48 @@ def test_animations_submenu(window):
     assert texts == ["Включены", "Выключены"]
     anim_menu.actions()[1].trigger()
     assert window.toast.text.text().startswith("Анимации выключены")
+
+
+# --- v0.5.1: карточка клиента и границы столбцов ---
+
+def test_client_details_show_full_note(window, manager):
+    long_note = "Очень длинная заметка о клиенте. " * 10
+    client = manager.add_client(Client(name="Алиса", note=long_note.strip(),
+                                       email="a@mail.ru",
+                                       preferred_contact=ContactMethod.EMAIL))
+    window.refresh()
+    table = window.clients.table
+    assert window.clients.details.isHidden()   # ничего не выбрано
+    row = [table.item(r, 0).text() for r in range(table.rowCount())].index(
+        client.name)
+    table.selectRow(row)
+    assert not window.clients.details.isHidden()
+    assert window.clients.details_note.text() == long_note.strip()
+    assert "a@mail.ru ★" in window.clients.details_contacts.text()
+    # Подсказка заметки — с переносом строк (HTML)
+    assert table.item(row, 8).toolTip().startswith("<p")
+
+
+def test_column_cannot_grow_past_table(window):
+    table = _shown_clients(window, 1200)
+    header = table.horizontalHeader()
+    window.set_table_editing(True)
+    header.resizeSection(0, 5000)  # тянем «Имя» далеко за край
+    used = sum(header.sectionSize(c) for c in range(table.columnCount()))
+    assert used == table.viewport().width()
+    # Соседи сжались не меньше минимума
+    from freelancedesk.app.table_layout import MIN_WIDTH
+    assert min(header.sectionSize(c) for c in range(1, 9)) >= MIN_WIDTH
+    window.set_table_editing(False)
+    window.close()
+
+
+def test_shrinking_column_leaves_no_gap(window):
+    table = _shown_clients(window, 1200)
+    header = table.horizontalHeader()
+    window.set_table_editing(True)
+    header.resizeSection(0, 70)  # сужаем «Имя»
+    used = sum(header.sectionSize(c) for c in range(table.columnCount()))
+    assert used == table.viewport().width()  # справа нет пустой полосы
+    window.set_table_editing(False)
+    window.close()
