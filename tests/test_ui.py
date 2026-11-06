@@ -806,3 +806,40 @@ def test_shrinking_column_leaves_no_gap(window):
     assert used == table.viewport().width()  # справа нет пустой полосы
     window.set_table_editing(False)
     window.close()
+
+
+# --- Этап 2: экспорт и резервные копии из интерфейса ---
+
+def test_data_menu(window):
+    menu = window.sidebar.settings_btn.menu()
+    data = next(a.menu() for a in menu.actions() if a.text() == "Данные")
+    texts = [a.text() for a in data.actions() if a.text()]
+    assert "Экспорт всех данных в Excel…" in texts
+    backup_action = next(a for a in data.actions()
+                         if a.text() == "Создать резервную копию")
+    assert not backup_action.isEnabled()  # в тестах база в памяти
+
+
+def test_export_excel_from_window(window, tmp_path):
+    path = tmp_path / "export.xlsx"
+    window.export_excel(path)
+    assert path.exists()
+    assert window.toast.text.text() == "Сохранено: export.xlsx"
+
+
+def test_export_csv_from_finance(window, tmp_path):
+    path = tmp_path / "payments.csv"
+    window.finance.export_csv(path)
+    assert path.read_text(encoding="utf-8-sig").startswith("Дата;")
+
+
+def test_backup_from_window(manager, tmp_path):
+    import sqlite3
+    db = tmp_path / "app.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+    win = MainWindow(manager, today=lambda: TODAY, data_dir=tmp_path,
+                     db_path=db)
+    path = win.make_backup()
+    assert path.exists() and path.parent == tmp_path / "backups"
+    assert win.toast.text.text() == "Резервная копия создана"

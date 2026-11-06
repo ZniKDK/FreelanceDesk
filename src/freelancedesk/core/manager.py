@@ -206,6 +206,12 @@ class OrderManager:
         # InMemoryStorage. Менеджеру всё равно, какое именно.
         self._storage = storage
 
+    def close(self) -> None:
+        """Закрыть соединение с базой (перед восстановлением копии)."""
+        close = getattr(self._storage, "close", None)
+        if close is not None:
+            close()
+
     # ------------------------------------------------------------------
     # Клиенты
     # ------------------------------------------------------------------

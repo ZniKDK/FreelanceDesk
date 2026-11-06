@@ -49,6 +49,10 @@ Client 1 ──< Order 1 ──< Payment
 | `app/labels.py` | — | Русские подписи, деньги, даты, сроки словами |
 | `config.py` | — | Папка данных пользователя, `config.ini`, выбор хранилища |
 | `migrate.py` | — | Применение SQL-миграций, учёт в `schema_migrations` |
+| `backup.py` | — | Резервные копии SQLite (backup API), автокопия раз в неделю, восстановление |
+| `export.py` | — | Экспорт в Excel (openpyxl) и CSV |
+| `logs.py` | — | Журнал в файл с ротацией, перехват непредвиденных ошибок |
+| `demo.py` | — | Тестовые данные (`python -m freelancedesk.demo`) |
 
 ## Правила
 
