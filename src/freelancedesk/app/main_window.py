@@ -15,7 +15,9 @@ from pathlib import Path
 import sys
 
 from PyQt6.QtCore import QByteArray, QProcess, QSettings, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
+from PyQt6.QtGui import (
+    QAction, QActionGroup, QDesktopServices, QIcon, QKeySequence,
+)
 from PyQt6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QFrame, QHBoxLayout,
     QMainWindow, QMenu,
@@ -26,6 +28,7 @@ from freelancedesk import __version__, backup
 from freelancedesk.export import export_excel
 from freelancedesk.logs import LOG_NAME, log, log_dir
 from freelancedesk.app import animations
+from freelancedesk.config import resource_dir
 from freelancedesk.app.pages.clients import ClientsPage
 from freelancedesk.app.pages.dashboard import DashboardPage
 from freelancedesk.app.pages.finance import FinancePage
@@ -208,7 +211,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        self.setWindowIcon(icon("briefcase", C["accent"], 32))
+        # Та же иконка, что у exe-файла (resources/app.png)
+        self.setWindowIcon(QIcon(str(resource_dir() / "resources"
+                                     / "app.png")))
         self.table_layouts = []  # экраны зарегистрируют свои таблицы
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self)

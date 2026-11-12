@@ -1,0 +1,28 @@
+# Автотесты при каждой отправке кода на GitHub и в pull request.
+# Тесты интерфейса работают без экрана (QT_QPA_PLATFORM=offscreen),
+# тесты PostgreSQL здесь пропускаются — им нужна база на компьютере.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Установка зависимостей
+        run: pip install -r requirements.txt
+      - name: Тесты
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: pytest -q
