@@ -57,7 +57,14 @@
 
 ## Скачать
 
-Готовая программа для Windows — в разделе [Releases](https://github.com/ZniKDK/FreelanceDesk/releases): скачайте архив, распакуйте и запустите `FreelanceDesk.exe`. Python ставить не нужно.
+Готовая программа для Windows 10/11 — в разделе [Releases](https://github.com/ZniKDK/FreelanceDesk/releases/latest). Выберите удобный вариант:
+
+| Файл | Что это |
+|---|---|
+| `FreelanceDesk-<версия>-Setup.exe` | установщик: ярлыки, удаление через «Приложения», права администратора не нужны |
+| `FreelanceDesk-<версия>-portable.zip` | переносная версия: распакуйте и запустите `FreelanceDesk.exe` |
+
+Python ставить не нужно.
 
 ## Установка и запуск из исходников
 
@@ -114,7 +121,9 @@ SQLite хватает для одного пользователя. Если н�
 .\build.ps1
 ```
 
-Результат — `dist\FreelanceDesk\FreelanceDesk.exe` и архив `dist\FreelanceDesk-<версия>-windows.zip`. Иконка пересоздаётся командой `python tools/make_icon.py`.
+Результат в `dist`: программа папкой, переносной архив `*-portable.zip` и установщик `*-Setup.exe` (если установлен [Inno Setup](https://jrsoftware.org/isinfo.php)). Иконка пересоздаётся командой `python tools/make_icon.py`.
+
+Новая версия выпускается тегом: `git tag v1.2.3` и `git push origin v1.2.3` — GitHub Actions сам соберёт файлы и опубликует релиз с описанием из `docs/releases/v1.2.3.md`.
 
 ## Тесты
 
