@@ -270,6 +270,20 @@ def test_panel_shows_money(window, manager):
     assert panel.money_bar.value() == 50
 
 
+def test_copy_order_summary(window, manager, qapp):
+    window.open_order(find(manager, "Telegram-бот").id)
+
+    window.orders.copy_summary()
+
+    assert qapp.clipboard().text().splitlines() == [
+        "Telegram-бот",
+        "Статус: В работе",
+        "Цена: 15 000,00 ₽",
+        "Получено: 7 500,00 ₽",
+        "Осталось получить: 7 500,00 ₽",
+    ]
+
+
 def test_open_order_hidden_by_filter(window, manager):
     # «Парсер» завершён и не виден в «Активных» — фильтр переключится
     window.open_order(find(manager, "Парсер").id)

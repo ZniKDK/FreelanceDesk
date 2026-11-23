@@ -12,8 +12,8 @@ from datetime import date
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QButtonGroup, QDialog, QFrame, QGraphicsOpacityEffect, QGridLayout,
-    QHBoxLayout, QLineEdit, QListWidgetItem, QMenu, QProgressBar,
+    QApplication, QButtonGroup, QDialog, QFrame, QGraphicsOpacityEffect,
+    QGridLayout, QHBoxLayout, QLineEdit, QListWidgetItem, QMenu, QProgressBar,
     QScrollArea, QSplitter, QStackedLayout, QVBoxLayout, QWidget,
 )
 
@@ -569,6 +569,7 @@ class OrdersPage(Page):
         link = menu.addAction(icon("external-link"), "Открыть ссылку",
                               self.open_link)
         link.setEnabled(bool(order.link))
+        menu.addAction("Скопировать сводку", self.copy_summary)
         menu.addSeparator()
         menu.addAction(icon("trash-2", C["danger_text"]), "Удалить",
                        self.delete_order)
@@ -677,6 +678,21 @@ class OrdersPage(Page):
             QDesktopServices.openUrl(QUrl(link))
         else:
             self.app.show_error("У заказа нет ссылки.")
+
+    def copy_summary(self) -> None:
+        order_id = self._need_order()
+        if order_id is None:
+            return
+        order = self.app.manager.get_order(order_id)
+        money = self.app.manager.money(order_id)
+        QApplication.clipboard().setText("\n".join((
+            order.title,
+            f"Статус: {STATUS_LABELS[order.status]}",
+            f"Цена: {format_money(money.price)}",
+            f"Получено: {format_money(money.received)}",
+            f"Осталось получить: {format_money(money.remaining)}",
+        )))
+        self.app.notify("Сводка заказа скопирована")
 
     # ------------------------------------------------------------------
     # Платежи
